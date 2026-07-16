@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Adaptive-style launcher drawn as a single vector (no PNG, keeps APK tiny) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Shield -->
+    <path
+        android:fillColor="#4F8CFF"
+        android:pathData="M54,18 L84,30 L84,54 C84,72 70,86 54,92 C38,86 24,72 24,54 L24,30 Z" />
+    <!-- Inner globe lines -->
+    <path
+        android:fillColor="#0E1116"
+        android:pathData="M54,34 C44,34 36,42 36,52 C36,62 44,70 54,70 C64,70 72,62 72,52 C72,42 64,34 54,34 Z" />
+    <path
+        android:strokeColor="#4F8CFF"
+        android:strokeWidth="2.4"
+        android:pathData="M36,52 L72,52 M54,34 C48,40 48,64 54,70 M54,34 C60,40 60,64 54,70" />
+</vector>

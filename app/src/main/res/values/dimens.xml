@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <dimen name="toolbar_height">48dp</dimen>
+    <dimen name="corner_sheet">20dp</dimen>
+    <dimen name="shortcut_size">56dp</dimen>
+    <dimen name="edge_gesture_dp">28dp</dimen>
+</resources>

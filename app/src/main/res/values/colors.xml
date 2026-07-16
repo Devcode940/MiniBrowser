@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Base palette (dark, privacy-first) -->
+    <color name="bg">#0E1116</color>
+    <color name="primary">#14171F</color>
+    <color name="primary_dark">#090B10</color>
+    <color name="surface">#181C24</color>
+    <color name="surface_elevated">#222732</color>
+    <color name="divider">#2A2F3A</color>
+
+    <color name="text_primary">#ECEFF4</color>
+    <color name="text_secondary">#8B93A5</color>
+    <color name="text_inverse">#0E1116</color>
+
+    <color name="accent">#4F8CFF</color>
+    <color name="accent_pressed">#3A6FD6</color>
+    <color name="active">#22C55E</color>
+    <color name="danger">#FF4D4F</color>
+
+    <!-- Shortcut circle tints -->
+    <color name="c_agent">#8B5CF6</color>
+    <color name="c_qwen">#4F8CFF</color>
+    <color name="c_github">#6E7681</color>
+    <color name="c_search">#DE3F24</color>
+    <color name="c_wiki">#374151</color>
+    <color name="c_notepad">#14B8A6</color>
+    <color name="c_offline">#F59E0B</color>
+    <color name="c_about">#EC4899</color>
+</resources>

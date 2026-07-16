@@ -1,0 +1,129 @@
+# ============================================================================
+# MiniBrowser fallback blocklist  (one host per line, lowercase)
+# Lines beginning with '#' are ignored. Sub-domains are matched automatically
+# (e.g. an entry "doubleclick.net" also blocks "ads.doubleclick.net").
+# This is a MINIMAL fallback shipped in the APK; users can extend it at runtime
+# via Click-to-Block, which appends CSS rules to custom.css.
+# ============================================================================
+
+# --- Major ad networks ---
+doubleclick.net
+googlesyndication.com
+googleadservices.com
+googletagservices.com
+google-analytics.com
+adservice.google.com
+adsense.com
+adservice.google.co.uk
+adnxs.com
+2mdn.net
+serving-sys.com
+
+# --- Programmatic / RTB ---
+pubmatic.com
+rubiconproject.com
+openx.net
+casalemedia.com
+criteo.com
+criteo.net
+adform.net
+smartadserver.com
+yieldlab.net
+yieldmo.com
+taboola.com
+outbrain.com
+mgid.com
+revcontent.com
+gravity.com
+
+# --- Analytics & telemetry ---
+scorecardresearch.com
+quantserve.com
+chartbeat.com
+newrelic.com
+nr-data.net
+hotjar.com
+mouseflow.com
+fullstory.com
+mixpanel.com
+segment.io
+amplitude.com
+appsflyer.com
+adjust.com
+branch.io
+kochava.com
+matomo.org
+clarity.ms
+
+# --- Social trackers / pixels ---
+facebook.net
+fbcdn-creative-a.akamaihd.net
+connect.facebook.net
+analytics.twitter.com
+ads-twitter.com
+linkedin.tracking.cdn
+ads.linkedin.com
+ads.tiktok.com
+analytics.tiktok.com
+snap.licdn.com
+redditstatic.com
+ads.reddit.com
+
+# --- Mobile ad SDKs ---
+mopub.com
+applovin.com
+chartboost.com
+unityads.unity3d.com
+unity3d.com
+inmobi.com
+adcolony.com
+vungle.com
+tapjoy.com
+ironsrc.com
+fyber.com
+startapp.com
+millennialmedia.com
+chartboost.com
+madhouse.cn
+domob.cn
+youmi.net
+adview.cn
+
+# --- Common trackers / beacons ---
+sentry.io
+sentry-cdn.com
+bugsnag.com
+raygun.io
+rollbar.com
+logrocket.com
+datadoghq.com
+sentry.io
+
+# --- Suspicious / crypto-mining ---
+coinhive.com
+coin-hive.com
+cryptoloot.pro
+load.jsecoin.com
+minero.cc
+webmine.cz
+
+# --- Popunder / redirect ad networks ---
+propellerads.com
+popads.net
+popcash.net
+adcash.com
+hilltopads.com
+adsrvr.org
+
+# --- Misc known trackers ---
+clean.gg
+krxd.net
+demdex.net
+everesttech.net
+omtrdc.net
+evidon.com
+truste.com
+trustarc.com
+optanon.com
+cookielaw.org
+onetrust.com

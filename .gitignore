@@ -1,0 +1,14 @@
+.sc/
+.sc_gen.sh
+build.sh
+android/
+MiniBrowser.zip
+*.iml
+.gradle/
+local.properties
+.idea/
+/build/
+/app/build/
+/captures/
+.externalNativeBuild/
+.cxx/

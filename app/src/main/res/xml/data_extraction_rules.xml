@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Backup rules: privacy-first browser.
+    Cloud backup: exclude all (user data never leaves the device).
+    Device transfer: include user-facing prefs (bookmarks, tools, settings)
+    for seamless migration to a new device.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="root" />
+        <exclude domain="file" />
+        <exclude domain="database" />
+        <exclude domain="sharedpref" />
+        <exclude domain="external" />
+    </cloud-backup>
+    <device-transfer>
+        <include domain="sharedpref" />
+        <include domain="file" path="notepad.txt" />
+        <exclude domain="root" />
+        <exclude domain="file" path="downloads.json" />
+        <exclude domain="file" path="offline" />
+        <exclude domain="database" />
+        <exclude domain="external" />
+    </device-transfer>
+</data-extraction-rules>

@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">MiniBrowser</string>
+    <string name="notepad">Notepad</string>
+    <string name="search_hint">Search or enter address</string>
+
+    <!-- Toolbar a11y -->
+    <string name="cd_back">Back</string>
+    <string name="cd_forward">Forward</string>
+    <string name="cd_reload">Reload</string>
+    <string name="cd_home">Home</string>
+    <string name="cd_menu">Menu</string>
+    <string name="cd_bookmark">Bookmark</string>
+    <string name="cd_close">Close</string>
+
+    <!-- Sheet pages -->
+    <string name="page_privacy">Privacy</string>
+    <string name="page_tools">Tools</string>
+    <string name="page_settings">Settings</string>
+
+    <!-- Downloads -->
+    <string name="downloads">Downloads</string>
+    <string name="download_media">Download media</string>
+    <string name="download_add">Add URL</string>
+    <string name="download_empty">No downloads yet.\n\nBrowse a page and tap "Download media",\nor add a direct .m3u8 / .mpd / .mp4 URL.</string>
+    <string name="download_pause">Pause</string>
+    <string name="download_resume">Resume</string>
+    <string name="download_delete">Delete</string>
+    <string name="download_open">Open</string>
+    <string name="download_share">Share</string>
+</resources>

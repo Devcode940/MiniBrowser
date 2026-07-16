@@ -1,0 +1,83 @@
+package com.minibrowser.download;
+
+/**
+ * A single download job (one media stream). Its state is mutated only by the
+ * {@link DownloadManager} (and the worker), and read by the UI via snapshots.
+ *
+ * Serialization is manual (to/from JSON in DownloadManager) — no reflection,
+ * which keeps R8 happy and avoids a serialization dependency.
+ */
+public final class DownloadTask {
+
+    public enum Type { M3U8, MPD, DIRECT, IMAGE, UNKNOWN }
+    public enum Status { PENDING, DOWNLOADING, PAUSED, MERGING, DONE, FAILED }
+
+    public String id;             // stable, url-hash based
+    public String url;            // the source URL (playlist/manifest/file)
+    public String pageUrl;        // where it was discovered (optional)
+    public Type type = Type.UNKNOWN;
+    public Status status = Status.PENDING;
+
+    public String title;
+    public String filename;       // final output filename (no path)
+
+    public int progress;          // 0..100
+    public long downloadedBytes;
+    public long totalBytes;       // -1 if unknown (e.g. live streams)
+
+    public String outputPath;     // absolute path to merged file when DONE
+    public String error;          // human-readable failure reason
+    public long addedAt;
+    public long doneAt;
+
+    public volatile boolean cancelRequested;
+    public volatile boolean pauseRequested;
+
+    public DownloadTask() { }
+
+    public DownloadTask(String url, String pageUrl, Type type) {
+        this.url = url;
+        this.pageUrl = pageUrl;
+        this.type = type;
+        this.id = Long.toHexString(Math.abs(url.hashCode())) + "_" + System.currentTimeMillis();
+        this.addedAt = System.currentTimeMillis();
+        this.totalBytes = -1;
+        deriveFilename();
+    }
+
+    void deriveFilename() {
+        String base;
+        int slash = url.lastIndexOf('/');
+        base = slash >= 0 ? url.substring(slash + 1) : url;
+        int q = base.indexOf('?');
+        if (q > 0) base = base.substring(0, q);
+        if (base.isEmpty()) base = "media_" + id;
+        // Normalise extension to the container implied by the type.
+        String ext = extFor(type);
+        int dot = base.lastIndexOf('.');
+        if (dot <= 0) {
+            base = base + ext;
+        } else if (!isMediaExt(base.substring(dot + 1))) {
+            base = base.substring(0, dot) + ext;
+        }
+        this.filename = base;
+    }
+
+    private static String extFor(Type t) {
+        switch (t) {
+            case M3U8: return ".ts";
+            case MPD:  return ".mp4";
+            case DIRECT: return ".mp4";
+            case IMAGE: return ".jpg";
+            default:   return ".bin";
+        }
+    }
+
+    private static boolean isMediaExt(String s) {
+        String l = s.toLowerCase();
+        return l.equals("ts") || l.equals("mp4") || l.equals("m4a") || l.equals("mkv")
+                || l.equals("webm") || l.equals("mp3") || l.equals("aac") || l.equals("m4s")
+                || l.equals("jpg") || l.equals("jpeg") || l.equals("png") || l.equals("webp")
+                || l.equals("gif") || l.equals("bmp") || l.equals("svg");
+    }
+}
