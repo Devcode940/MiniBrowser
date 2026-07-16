@@ -1,6 +1,5 @@
 package com.minibrowser;
 
-import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Context;
 import android.content.Intent;
@@ -28,6 +27,7 @@ import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
 import androidx.core.view.WindowInsetsControllerCompat;
@@ -40,7 +40,7 @@ import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
 
-public class MainActivity extends Activity implements BrowserCore.Callback {
+public class MainActivity extends AppCompatActivity implements BrowserCore.Callback {
 
     public static final int REQ_FILE = 0xA001;
     public static final int REQ_GEO = 0xA002;
