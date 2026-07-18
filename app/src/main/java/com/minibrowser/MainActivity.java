@@ -1233,6 +1233,7 @@ public class MainActivity extends AppCompatActivity implements BrowserCore.Callb
         updateBookmarkIcon(url);
         if (url == null || url.startsWith("about:")) return;
         isHome = false;
+        vm.setHome(false);
         homeOverlay.setVisibility(View.GONE);
         try { Uri uri = Uri.parse(url); String host = uri.getHost(); urlBar.setText(host != null ? host : url); }
         catch (Exception e) { urlBar.setText(url); }
@@ -1245,7 +1246,7 @@ public class MainActivity extends AppCompatActivity implements BrowserCore.Callb
     }
     @Override public void onPageFinished(String url) { progress.setVisibility(View.GONE); updateNavButtons(); updateBookmarkIcon(url); }
     @Override public void onTitleChanged(String title) { currentTitle = title == null ? "" : title; }
-    @Override public void onHome() { isHome = true; homeOverlay.setVisibility(View.VISIBLE); }
+    @Override public void onHome() { isHome = true; vm.setHome(true); homeOverlay.setVisibility(View.VISIBLE); }
     @Override public void showToast(String msg) { toast(msg); }
 
     private void updateNavButtons() {

@@ -34,6 +34,12 @@ public class BrowserCoreTest {
         assertFalse(BrowserCore.looksLikeUrl("a".repeat(25))); // TLD too long
     }
 
+    @Test
+    public void looksLikeUrl_nullInput() {
+        // Verify null safety
+        assertFalse(BrowserCore.looksLikeUrl(null));
+    }
+
     // ---- jsString ----
 
     @Test

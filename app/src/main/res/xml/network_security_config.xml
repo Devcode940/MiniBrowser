@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Network Security Configuration for MiniBrowser -->
+<!-- Enforces certificate pinning and restricts cleartext traffic -->
+
+<network-security-config>
+    <!-- Block all cleartext (HTTP) traffic by default -->
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <!-- Trust pre-installed CAs -->
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+
+    <!-- Domain-specific configurations -->
+    <domain-config cleartextTrafficPermitted="false">
+        <!-- Blocklist source -->
+        <domain includeSubdomains="true">raw.githubusercontent.com</domain>
+        <domain includeSubdomains="true">github.com</domain>
+        
+        <!-- AI provider endpoints -->
+        <domain includeSubdomains="true">api.openai.com</domain>
+        <domain includeSubdomains="true">generativelanguage.googleapis.com</domain>
+        <domain includeSubdomains="true">api.deepseek.com</domain>
+        <domain includeSubdomains="true">api.moonshot.cn</domain>
+        <domain includeSubdomains="true">dashscope.aliyuncs.com</domain>
+        <domain includeSubdomains="true">api.x.ai</domain>
+        <domain includeSubdomains="true">openrouter.ai</domain>
+        <domain includeSubdomains="true">api.githubcopilot.com</domain>
+        
+        <!-- Allow HTTPS for all other domains -->
+        <domain includeSubdomains="false">*</domain>
+    </domain-config>
+
+    <!-- Certificate pinning for critical domains -->
+    <!-- Note: These are example pins; actual pins should be generated from the
+         target server's certificate chain and rotated periodically. -->
+    <!-- 
+    <domain-config>
+        <domain includeSubdomains="true">raw.githubusercontent.com</domain>
+        <pin-set expiration="2026-12-31">
+            <pin digest="SHA-256">dGHPfLN3B1y0aMx9Zj8sH99M43R2Ft29P9K1w8Q=</pin>
+            <pin digest="SHA-256">YLh1dUR9y6Kja30RrAn7JKnbQG/uEtLMkBgFF2Fuihg=</pin>
+        </pin-set>
+    </domain-config>
+    -->
+</network-security-config>

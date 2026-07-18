@@ -36,6 +36,11 @@ public class AiClient {
     private static final String PREFS = "minibrowser";
     private static final String K_ACTIVE = "ai_provider";
     private static final String K_CUSTOM = "ai_custom_providers";
+    
+    // Rate limiting: minimum 2 seconds between requests to prevent API abuse
+    private static final long MIN_REQUEST_INTERVAL_MS = 2000;
+    private static long lastRequestTime = 0;
+    private static final Object requestLock = new Object();
 
     /** A chat provider. {@code endpoint} is the FULL chat-completions URL. */
     public static final class Provider {
@@ -227,6 +232,19 @@ public class AiClient {
             cb.onError("Set an endpoint for " + getActiveProvider().name + " first.");
             return;
         }
+        
+        // Rate limiting check
+        synchronized (requestLock) {
+            long now = System.currentTimeMillis();
+            long elapsed = now - lastRequestTime;
+            if (elapsed < MIN_REQUEST_INTERVAL_MS) {
+                final long waitTime = (MIN_REQUEST_INTERVAL_MS - elapsed) / 1000;
+                main.post(() -> cb.onError("Rate limited. Wait " + waitTime + "s before next request."));
+                return;
+            }
+            lastRequestTime = now;
+        }
+        
         new Thread(() -> {
             HttpURLConnection conn = null;
             try {

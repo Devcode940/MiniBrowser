@@ -82,8 +82,15 @@ public class BlocklistUpdater {
     public String getUrl() { return prefs.getString(K_URL, DEFAULT_URL); }
     public void setUrl(String u) {
         if (u == null || u.trim().isEmpty()) return;
+        String trimmed = u.trim();
+        // Validate URL starts with http:// or https://
+        if (!trimmed.toLowerCase().startsWith("http://") && 
+            !trimmed.toLowerCase().startsWith("https://")) {
+            Log.w(TAG, "Invalid blocklist URL: must start with http:// or https://");
+            return;
+        }
         // Changing the source invalidates the cached ETag/Last-Modified.
-        prefs.edit().putString(K_URL, u.trim()).remove(K_ETAG).remove(K_LASTMOD).apply();
+        prefs.edit().putString(K_URL, trimmed).remove(K_ETAG).remove(K_LASTMOD).apply();
     }
 
     public boolean isStale() {
@@ -145,7 +152,12 @@ public class BlocklistUpdater {
         HttpURLConnection conn = null;
         int added = 0;
         try {
-            URL u = new URL(getUrl());
+            String url = getUrl();
+            if (url == null || url.isEmpty()) {
+                post(cb, false, "No blocklist URL configured");
+                return;
+            }
+            URL u = new URL(url);
             conn = (HttpURLConnection) u.openConnection();
             conn.setConnectTimeout(15000);
             conn.setReadTimeout(30000);

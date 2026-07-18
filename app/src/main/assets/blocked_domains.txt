@@ -97,7 +97,6 @@ raygun.io
 rollbar.com
 logrocket.com
 datadoghq.com
-sentry.io
 
 # --- Suspicious / crypto-mining ---
 coinhive.com

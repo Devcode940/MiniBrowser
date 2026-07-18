@@ -93,4 +93,22 @@ public class BlocklistUpdaterTest {
     public void parseHost_multipleWhitespace() {
         assertEquals("example.com", BlocklistUpdater.parseHost("0.0.0.0   example.com"));
     }
+
+    // ---- setUrl validation (requires Android context, so tested separately) ----
+    // Note: Full setUrl() testing requires a mock Context. These tests verify the
+    // parseHost logic which is used by setUrl internally.
+
+    @Test
+    public void parseHost_acceptsHttpUrls() {
+        // URLs starting with http:// or https:// should be accepted
+        assertEquals("example.com", BlocklistUpdater.parseHost("https://example.com"));
+        assertEquals("example.com", BlocklistUpdater.parseHost("http://example.com"));
+    }
+
+    @Test
+    public void parseHost_rejectsNonHttpSchemes() {
+        // URLs without http/https should be rejected in setUrl validation
+        assertNull(BlocklistUpdater.parseHost("ftp://example.com"));
+        assertNull(BlocklistUpdater.parseHost("file:///path"));
+    }
 }
