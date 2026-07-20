@@ -6,8 +6,14 @@ import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
 
+import androidx.security.crypto.EncryptedSharedPreferences;
+import androidx.security.crypto.MasterKey;
+
 import org.json.JSONArray;
 import org.json.JSONObject;
+
+import java.io.IOException;
+import java.security.GeneralSecurityException;
 
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
@@ -93,11 +99,65 @@ public class AiClient {
         void onError(String message);
     }
 
+    private static final String SECURE_PREFS = "minibrowser_secure";
+    private static final String K_MIGRATED = "ai_keys_migrated_to_secure_store";
+
     private final SharedPreferences prefs;
+    private final SharedPreferences securePrefs;
     private final Handler main = new Handler(Looper.getMainLooper());
 
     public AiClient(Context c) {
-        prefs = c.getApplicationContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        Context appCtx = c.getApplicationContext();
+        prefs = appCtx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        securePrefs = buildSecurePrefs(appCtx);
+        migrateLegacyKeysIfNeeded();
+    }
+
+    /**
+     * API keys are sensitive credentials and are stored in a dedicated,
+     * AES-256-GCM-encrypted preferences file backed by the Android Keystore —
+     * never in the plain "minibrowser" prefs used for non-sensitive settings.
+     * Falls back to a plain (unencrypted) file only if Keystore setup itself
+     * fails (e.g. a broken device keystore); this keeps the app usable while
+     * still isolating keys from the general prefs file.
+     */
+    private static SharedPreferences buildSecurePrefs(Context appCtx) {
+        try {
+            MasterKey masterKey = new MasterKey.Builder(appCtx)
+                    .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+                    .build();
+            return EncryptedSharedPreferences.create(
+                    appCtx,
+                    SECURE_PREFS,
+                    masterKey,
+                    EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                    EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM);
+        } catch (GeneralSecurityException | IOException e) {
+            Log.e(TAG, "Failed to init encrypted key store, falling back to isolated plain prefs: " + e.getMessage());
+            return appCtx.getSharedPreferences(SECURE_PREFS + "_fallback", Context.MODE_PRIVATE);
+        }
+    }
+
+    /** One-time move of any keys previously saved in the plaintext "minibrowser" prefs. */
+    private void migrateLegacyKeysIfNeeded() {
+        if (prefs.getBoolean(K_MIGRATED, false)) return;
+        SharedPreferences.Editor plainEditor = prefs.edit();
+        SharedPreferences.Editor secureEditor = securePrefs.edit();
+        boolean movedAny = false;
+        for (String key : prefs.getAll().keySet()) {
+            if (key.startsWith("ai_key_")) {
+                String value = prefs.getString(key, null);
+                if (value != null && !value.isEmpty()) {
+                    secureEditor.putString(key, value);
+                    movedAny = true;
+                }
+                plainEditor.remove(key);
+            }
+        }
+        plainEditor.putBoolean(K_MIGRATED, true);
+        plainEditor.apply();
+        if (movedAny) secureEditor.apply();
+        if (movedAny) Log.i(TAG, "Migrated AI provider keys to encrypted storage.");
     }
 
     // ---------------- provider management ----------------
@@ -151,8 +211,8 @@ public class AiClient {
         List<Provider> keep = new ArrayList<>();
         for (Provider p : customs) if (!p.id.equals(id)) keep.add(p);
         saveCustoms(keep);
-        prefs.edit().remove("ai_key_" + id).remove("ai_endpoint_" + id)
-                .remove("ai_model_" + id).apply();
+        securePrefs.edit().remove("ai_key_" + id).apply();
+        prefs.edit().remove("ai_endpoint_" + id).remove("ai_model_" + id).apply();
         if (id.equals(getActiveProviderId())) {
             prefs.edit().putString(K_ACTIVE, BUILTINS[0].id).apply();
         }
@@ -204,9 +264,9 @@ public class AiClient {
         prefs.edit().putString("ai_endpoint_" + getActiveProviderId(), u == null ? "" : u.trim()).apply();
     }
 
-    public String getKey() { return prefs.getString("ai_key_" + getActiveProviderId(), ""); }
+    public String getKey() { return securePrefs.getString("ai_key_" + getActiveProviderId(), ""); }
     public void setKey(String k) {
-        prefs.edit().putString("ai_key_" + getActiveProviderId(), k == null ? "" : k.trim()).apply();
+        securePrefs.edit().putString("ai_key_" + getActiveProviderId(), k == null ? "" : k.trim()).apply();
     }
 
     public String getModel() {

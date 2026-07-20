@@ -51,6 +51,7 @@ public final class DownloadTask {
         base = slash >= 0 ? url.substring(slash + 1) : url;
         int q = base.indexOf('?');
         if (q > 0) base = base.substring(0, q);
+        base = sanitize(base);
         if (base.isEmpty()) base = "media_" + id;
         // Normalise extension to the container implied by the type.
         String ext = extFor(type);
@@ -61,6 +62,33 @@ public final class DownloadTask {
             base = base.substring(0, dot) + ext;
         }
         this.filename = base;
+    }
+
+    /**
+     * The URL segment this is derived from is remote-controlled (page/media
+     * URL), so it's treated as untrusted input before it's ever used in a
+     * {@code new File(outDir, filename)} call. Strips path separators,
+     * control characters, and other filesystem-unsafe characters, then caps
+     * the length so a pathological URL can't produce an unusable filename.
+     */
+    private static String sanitize(String s) {
+        if (s == null) return "";
+        try {
+            // URL-decode first: a segment like "%2e%2e%2f" should be neutralised
+            // the same way a literal "../" is, not smuggled through untouched.
+            s = java.net.URLDecoder.decode(s, "UTF-8");
+        } catch (Exception ignored) { }
+        // Drop path separators and traversal sequences outright.
+        s = s.replace("/", "").replace("\\", "").replace("..", "");
+        // Strip control characters and characters illegal/unsafe on common
+        // Android/Windows/Linux filesystems: " * : < > ? | and NUL.
+        s = s.replaceAll("[\\x00-\\x1f\\x7f\"*:<>?|]", "");
+        s = s.trim();
+        // Don't allow hidden-file-style or empty-after-strip names.
+        while (s.startsWith(".")) s = s.substring(1);
+        final int MAX_LEN = 120;
+        if (s.length() > MAX_LEN) s = s.substring(s.length() - MAX_LEN);
+        return s;
     }
 
     private static String extFor(Type t) {
