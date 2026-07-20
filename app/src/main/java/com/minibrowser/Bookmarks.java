@@ -96,6 +96,15 @@ public class Bookmarks {
         if (changed) persist();
     }
 
+    /** Replace all bookmarks with a new list (used during Cloud Sync restore). */
+    public synchronized void replaceAll(List<Entry> newEntries) {
+        entries.clear();
+        if (newEntries != null) {
+            entries.addAll(newEntries);
+        }
+        persist();
+    }
+
     private static String safeTitle(String title, String url) {
         if (title == null || title.trim().isEmpty()) return url;
         return title.trim();

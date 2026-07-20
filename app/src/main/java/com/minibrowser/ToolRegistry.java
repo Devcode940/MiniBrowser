@@ -45,6 +45,8 @@ public final class ToolRegistry {
     // id -> {label, defaultVisible, isToggle}
     private static final Map<String, Object[]> BUILTINS = new LinkedHashMap<>();
     static {
+        BUILTINS.put("split",        new Object[]{"Toggle Split Screen", Boolean.TRUE, Boolean.FALSE});
+        BUILTINS.put("tabs",         new Object[]{"Manage Tabs", Boolean.TRUE, Boolean.FALSE});
         BUILTINS.put("block",        new Object[]{"Click-to-Block", Boolean.TRUE, Boolean.TRUE});
         BUILTINS.put("translate",    new Object[]{"Translate page", Boolean.TRUE, Boolean.FALSE});
         BUILTINS.put("download",     new Object[]{"Download media", Boolean.TRUE, Boolean.FALSE});

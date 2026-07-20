@@ -87,9 +87,9 @@
             android:progressDrawable="@drawable/progress_bar"
             android:visibility="gone" />
 
-        <!-- ===== WebView ===== -->
-        <com.minibrowser.GestureWebView
-            android:id="@+id/webview"
+        <!-- ===== WebView Container ===== -->
+        <FrameLayout
+            android:id="@+id/webview_container"
             android:layout_width="match_parent"
             android:layout_height="match_parent" />
     </LinearLayout>

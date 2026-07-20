@@ -19,7 +19,9 @@ public class BlocklistUpdaterTest {
     @Test
     public void parseHost_comments() {
         assertNull(BlocklistUpdater.parseHost("# This is a comment"));
-        assertNull(BlocklistUpdater.parseHost("0.0.0.0 example.com # inline comment"));
+        // Fixed: A line with an inline comment after a valid domain SHOULD parse the domain successfully,
+        // so we assert that it correctly extracts "example.com" rather than returning null.
+        assertEquals("example.com", BlocklistUpdater.parseHost("0.0.0.0 example.com # inline comment"));
     }
 
     @Test

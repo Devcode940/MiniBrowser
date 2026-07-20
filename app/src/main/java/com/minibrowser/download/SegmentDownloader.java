@@ -103,25 +103,27 @@ final class SegmentDownloader {
 
         boolean isFmp4 = pl.initSegment != null
                 || mediaLooksFragmented(pl.segments);
-        // fMP4 needs the init segment first; plain TS just concatenates.
+        
+        File tempFile = new File(outDir, task.id + "_temp_seg.tmp");
         try (FileOutputStream fos = new FileOutputStream(out)) {
             if (pl.initSegment != null) {
-                byte[] init = fetchBytes(pl.initSegment);
-                fos.write(init);
-                task.downloadedBytes += init.length;
+                downloadSegmentWithRetry(pl.initSegment, tempFile, task);
+                appendFile(tempFile, fos);
             }
             int total = pl.segments.size();
             int idx = 0;
             for (String seg : pl.segments) {
                 checkInterrupt(task);
-                byte[] data = fetchWithRetry(seg);
-                fos.write(data);
-                task.downloadedBytes += data.length;
+                downloadSegmentWithRetry(seg, tempFile, task);
+                appendFile(tempFile, fos);
                 idx++;
                 task.progress = (int) (idx * 100L / total);
             }
             fos.flush();
+        } finally {
+            if (tempFile.exists()) tempFile.delete();
         }
+
         // Hint the container if it's fragmented MP4 but the filename is .ts.
         if (isFmp4 && task.filename.endsWith(".ts")) {
             task.filename = task.filename.substring(0, task.filename.length() - 3) + ".mp4";
@@ -159,23 +161,24 @@ final class SegmentDownloader {
         task.outputPath = out.getAbsolutePath();
         task.status = DownloadTask.Status.DOWNLOADING;
 
+        File tempFile = new File(outDir, task.id + "_temp_seg.tmp");
         try (FileOutputStream fos = new FileOutputStream(out)) {
             if (r.initSegment != null) {
-                byte[] init = fetchBytes(r.initSegment);
-                fos.write(init);
-                task.downloadedBytes += init.length;
+                downloadSegmentWithRetry(r.initSegment, tempFile, task);
+                appendFile(tempFile, fos);
             }
             int total = r.segments.size();
             int idx = 0;
             for (String seg : r.segments) {
                 checkInterrupt(task);
-                byte[] data = fetchWithRetry(seg);
-                fos.write(data);
-                task.downloadedBytes += data.length;
+                downloadSegmentWithRetry(seg, tempFile, task);
+                appendFile(tempFile, fos);
                 idx++;
                 task.progress = (int) (idx * 100L / total);
             }
             fos.flush();
+        } finally {
+            if (tempFile.exists()) tempFile.delete();
         }
     }
 
@@ -214,11 +217,35 @@ final class SegmentDownloader {
 
     // --------------------------- networking ------------------------------
 
-    private static byte[] fetchWithRetry(String url) throws IOException {
+    private static void downloadSegment(String url, File tempFile, DownloadTask task) throws IOException {
+        HttpURLConnection conn = open(url, "GET", null);
+        try {
+            if (conn.getResponseCode() != HttpURLConnection.HTTP_OK) {
+                throw new IOException("HTTP " + conn.getResponseCode() + " for " + url);
+            }
+            try (InputStream in = conn.getInputStream();
+                 FileOutputStream fos = new FileOutputStream(tempFile)) {
+                byte[] buf = new byte[64 * 1024];
+                int n;
+                while ((n = in.read(buf)) > 0) {
+                    checkInterrupt(task);
+                    fos.write(buf, 0, n);
+                    // Update task downloadedBytes in real-time
+                    task.downloadedBytes += n;
+                }
+                fos.flush();
+            }
+        } finally {
+            conn.disconnect();
+        }
+    }
+
+    private static void downloadSegmentWithRetry(String url, File tempFile, DownloadTask task) throws IOException {
         IOException last = null;
         for (int attempt = 0; attempt < SEG_RETRIES; attempt++) {
             try {
-                return fetchBytes(url);
+                downloadSegment(url, tempFile, task);
+                return;
             } catch (IOException e) {
                 last = e;
                 try { Thread.sleep(500L * (attempt + 1)); } catch (InterruptedException ie) {
@@ -228,6 +255,16 @@ final class SegmentDownloader {
             }
         }
         throw last != null ? last : new IOException("Segment failed after retries: " + url);
+    }
+
+    private static void appendFile(File src, FileOutputStream dst) throws IOException {
+        try (java.io.FileInputStream in = new java.io.FileInputStream(src)) {
+            byte[] buf = new byte[64 * 1024];
+            int n;
+            while ((n = in.read(buf)) > 0) {
+                dst.write(buf, 0, n);
+            }
+        }
     }
 
     private static byte[] fetchBytes(String url) throws IOException {

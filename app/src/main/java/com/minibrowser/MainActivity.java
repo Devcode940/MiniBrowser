@@ -47,8 +47,9 @@ public class MainActivity extends AppCompatActivity implements BrowserCore.Callb
     public static final int REQ_WEB_PERMS = 0xA003;
 
     private MainViewModel vm;
-    private BrowserCore core;
-    private GestureWebView webview;
+    private BrowserCore core; // active tab core
+    private GestureWebView webview; // active tab webview
+    private FrameLayout webviewContainer;
     private Bookmarks bookmarks;
     private AiClient aiClient;
     private SnackPlayer snackPlayer;
@@ -97,6 +98,470 @@ public class MainActivity extends AppCompatActivity implements BrowserCore.Callb
     };
     private final String[] LANG_CODES = {"en","es","fr","de","it","pt","ru","zh","ja","ko","ar","hi","sw"};
 
+    // ============================ MULTI-TAB STRUCTURES ============================
+
+    private static class Tab {
+        final GestureWebView webView;
+        final BrowserCore core;
+        String title = "New Tab";
+        String url = BrowserCore.HOME;
+        boolean isHome = true;
+        boolean isPrivacyShieldsEnabled = true;
+
+        Tab(GestureWebView webView, BrowserCore core, boolean shields) {
+            this.webView = webView;
+            this.core = core;
+            this.isPrivacyShieldsEnabled = shields;
+            if (!shields) {
+                core.setAdBlockEnabled(false);
+                core.setCompatibilityMode(true);
+                core.setCellGuard(false);
+            }
+        }
+    }
+
+    private final List<Tab> tabsList = new ArrayList<>();
+    private int currentTabIdx = 0;
+
+    private Tab createNewTabWithShields(String url, boolean shields) {
+        GestureWebView newWebView = new GestureWebView(this);
+        newWebView.setLayoutParams(new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        BrowserCore newCore = new BrowserCore(this, newWebView, this);
+        Tab tab = new Tab(newWebView, newCore, shields);
+
+        newWebView.setGestureListener(new GestureWebView.GestureListener() {
+            @Override public void onEdgeBack()    { newCore.goBack(); }
+            @Override public void onEdgeForward() { newCore.goForward(); }
+        });
+        newWebView.setScrollListener((dx, dy, atTop) -> {
+            if (fullscreen) {
+                if (dy > 8) hideChrome();
+                else if (dy < -8 || atTop) showChrome();
+            }
+        });
+
+        if (url != null && !url.equals(BrowserCore.HOME)) {
+            tab.isHome = false;
+            tab.url = url;
+            newCore.loadUrl(url);
+        } else {
+            tab.isHome = true;
+            tab.url = "";
+        }
+
+        return tab;
+    }
+
+    private Tab createNewTab(String url) {
+        return createNewTabWithShields(url, true); // default is privacy shields enabled
+    }
+
+    private void selectTab(int index) {
+        if (index < 0 || index >= tabsList.size()) return;
+
+        // Reset split screen when manually switching tabs
+        if (splitScreenActive) {
+            toggleSplitScreen();
+        }
+
+        // Remove current webview from layout container
+        webviewContainer.removeAllViews();
+
+        currentTabIdx = index;
+        Tab activeTab = tabsList.get(index);
+
+        // Add the active tab's webview to container
+        webviewContainer.addView(activeTab.webView);
+
+        // Update active references
+        webview = activeTab.webView;
+        core = activeTab.core;
+        isHome = activeTab.isHome;
+        currentTitle = activeTab.title;
+
+        // Sync with UI
+        if (isHome) {
+            homeOverlay.setVisibility(View.VISIBLE);
+            urlBar.setText("");
+            urlBar.setHint(R.string.search_hint);
+        } else {
+            homeOverlay.setVisibility(View.GONE);
+            urlBar.setText(activeTab.url);
+        }
+
+        updateNavButtons();
+    }
+
+    private void closeTab(int index) {
+        if (index < 0 || index >= tabsList.size()) return;
+        Tab toClose = tabsList.remove(index);
+        toClose.core.destroy(); // Safely destroy dynamic components of closed tab
+
+        // Adjust active index safely
+        if (currentTabIdx >= tabsList.size()) {
+            currentTabIdx = tabsList.size() - 1;
+        } else if (currentTabIdx == index) {
+            if (currentTabIdx < 0) currentTabIdx = 0;
+        } else if (currentTabIdx > index) {
+            currentTabIdx--;
+        }
+
+        selectTab(currentTabIdx);
+    }
+
+    private void showTabsDialog() {
+        LinearLayout container = new LinearLayout(this);
+        container.setOrientation(LinearLayout.VERTICAL);
+        int pad = (int) dp(16);
+        container.setPadding(pad, pad, pad, pad);
+
+        ScrollView sv = new ScrollView(this);
+        LinearLayout list = new LinearLayout(this);
+        list.setOrientation(LinearLayout.VERTICAL);
+
+        for (int i = 0; i < tabsList.size(); i++) {
+            final int idx = i;
+            Tab t = tabsList.get(i);
+
+            LinearLayout item = new LinearLayout(this);
+            item.setOrientation(LinearLayout.HORIZONTAL);
+            item.setGravity(Gravity.CENTER_VERTICAL);
+            item.setPadding((int) dp(12), (int) dp(14), (int) dp(12), (int) dp(14));
+
+            if (i == currentTabIdx) {
+                item.setBackgroundColor(0x224F8CFF); // Highlight current active tab
+            } else {
+                item.setBackgroundResource(getSelectableBackground());
+            }
+
+            TextView tv = new TextView(this);
+            tv.setText((i + 1) + ". " + (t.isHome ? "New Tab" : t.title) + " " + (t.isPrivacyShieldsEnabled ? "[Shields On]" : "[Normal]"));
+            tv.setTextColor(getColor(R.color.text_primary));
+            tv.setTextSize(15);
+            tv.setSingleLine(true);
+            tv.setEllipsize(android.text.TextUtils.TruncateAt.END);
+            tv.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+            item.addView(tv);
+
+            if (tabsList.size() > 1) {
+                TextView close = new TextView(this);
+                close.setText("✕");
+                close.setTextColor(getColor(R.color.danger));
+                close.setTextSize(16);
+                close.setPadding((int) dp(12), (int) dp(4), (int) dp(12), (int) dp(4));
+                close.setClickable(true);
+                close.setOnClickListener(v -> {
+                    closeTab(idx);
+                    alertDialogTabs.dismiss();
+                    showTabsDialog();
+                });
+                item.addView(close);
+            }
+
+            item.setClickable(true);
+            item.setOnClickListener(v -> {
+                selectTab(idx);
+                alertDialogTabs.dismiss();
+            });
+
+            list.addView(item);
+
+            View div = new View(this);
+            div.setLayoutParams(new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 1));
+            div.setBackgroundColor(getColor(R.color.divider));
+            list.addView(div);
+        }
+
+        sv.addView(list);
+        container.addView(sv);
+
+        // Add standard private shields tab
+        TextView addTabBtn = new TextView(this);
+        addTabBtn.setText("+ New Privacy Tab");
+        addTabBtn.setTextColor(getColor(R.color.accent));
+        addTabBtn.setGravity(Gravity.CENTER);
+        addTabBtn.setPadding(0, (int) dp(14), 0, (int) dp(14));
+        addTabBtn.setTextSize(15);
+        addTabBtn.setClickable(true);
+        addTabBtn.setBackgroundResource(getSelectableBackground());
+        addTabBtn.setOnClickListener(v -> {
+            Tab newTab = createNewTabWithShields(BrowserCore.HOME, true);
+            tabsList.add(newTab);
+            selectTab(tabsList.size() - 1);
+            alertDialogTabs.dismiss();
+        });
+        container.addView(addTabBtn);
+
+        // Add normal unshielded tab
+        TextView addNormalTabBtn = new TextView(this);
+        addNormalTabBtn.setText("+ New Normal Tab (Unshielded)");
+        addNormalTabBtn.setTextColor(getColor(R.color.c_offline));
+        addNormalTabBtn.setGravity(Gravity.CENTER);
+        addNormalTabBtn.setPadding(0, (int) dp(14), 0, (int) dp(14));
+        addNormalTabBtn.setTextSize(15);
+        addNormalTabBtn.setClickable(true);
+        addNormalTabBtn.setBackgroundResource(getSelectableBackground());
+        addNormalTabBtn.setOnClickListener(v -> {
+            Tab newTab = createNewTabWithShields(BrowserCore.HOME, false);
+            tabsList.add(newTab);
+            selectTab(tabsList.size() - 1);
+            alertDialogTabs.dismiss();
+        });
+        container.addView(addNormalTabBtn);
+
+        alertDialogTabs = new AlertDialog.Builder(this)
+                .setTitle("Tabs Manager")
+                .setView(container)
+                .setNegativeButton("Close", null)
+                .create();
+        alertDialogTabs.show();
+    }
+
+    private AlertDialog alertDialogTabs;
+
+    private Tab findTabForCore(BrowserCore sender) {
+        for (Tab t : tabsList) {
+            if (t.core == sender) return t;
+        }
+        if (splitTabNormal != null && splitTabNormal.core == sender) return splitTabNormal;
+        return null;
+    }
+
+    // ============================ DUAL SPLIT-SCREEN & MINIMIZING ============================
+
+    private boolean splitScreenActive = false;
+    private LinearLayout splitContainerLayout;
+    private FrameLayout paneNormal;
+    private FrameLayout panePrivate;
+    private TextView minBarNormal;
+    private TextView minBarPrivate;
+    
+    private Tab splitTabNormal; // Bottom Panel (Normal Surf)
+    private Tab splitTabPrivate; // Top Panel (Privacy Surf)
+    
+    private boolean normalPaneMinimized = false;
+    private boolean privatePaneMinimized = false;
+
+    private void toggleSplitScreen() {
+        if (splitScreenActive) {
+            // Disable split screen
+            splitScreenActive = false;
+            webviewContainer.removeAllViews();
+            
+            // Clean up Normal Tab
+            if (splitTabNormal != null) {
+                splitTabNormal.core.destroy();
+                splitTabNormal = null;
+            }
+            splitTabPrivate = null;
+            
+            // Restore normal active tab
+            selectTab(currentTabIdx);
+            toast("Split screen mode closed");
+        } else {
+            // Enable split screen
+            splitScreenActive = true;
+            webviewContainer.removeAllViews();
+            
+            // Pane 1: Top (Current active tab as Privacy Shielded Side!)
+            splitTabPrivate = tabsList.get(currentTabIdx);
+            
+            // Pane 2: Bottom (Create fresh Normal Web Surf tab!)
+            splitTabNormal = createNewTabWithShields(BrowserCore.HOME, false);
+            
+            // Stacks top/bottom on mobile layout
+            splitContainerLayout = new LinearLayout(this);
+            splitContainerLayout.setOrientation(LinearLayout.VERTICAL);
+            splitContainerLayout.setLayoutParams(new FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+            
+            panePrivate = new FrameLayout(this);
+            LinearLayout.LayoutParams lpPrivate = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f);
+            panePrivate.setLayoutParams(lpPrivate);
+            
+            paneNormal = new FrameLayout(this);
+            LinearLayout.LayoutParams lpNormal = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f);
+            paneNormal.setLayoutParams(lpNormal);
+            
+            // Create minimized bars
+            minBarPrivate = new TextView(this);
+            minBarPrivate.setText("▲ Privacy Shield Tab [Minimized - Tap to Restore]");
+            minBarPrivate.setBackgroundColor(0xFF14171F);
+            minBarPrivate.setTextColor(getColor(R.color.accent));
+            minBarPrivate.setGravity(Gravity.CENTER);
+            minBarPrivate.setPadding(0, (int) dp(14), 0, (int) dp(14));
+            minBarPrivate.setVisibility(View.GONE);
+            minBarPrivate.setClickable(true);
+            
+            minBarNormal = new TextView(this);
+            minBarNormal.setText("▼ Normal Web Surf Tab [Minimized - Tap to Restore]");
+            minBarNormal.setBackgroundColor(0xFF14171F);
+            minBarNormal.setTextColor(getColor(R.color.c_offline));
+            minBarNormal.setGravity(Gravity.CENTER);
+            minBarNormal.setPadding(0, (int) dp(14), 0, (int) dp(14));
+            minBarNormal.setVisibility(View.GONE);
+            minBarNormal.setClickable(true);
+            
+            minBarPrivate.setOnClickListener(v -> restorePrivatePane());
+            minBarNormal.setOnClickListener(v -> restoreNormalPane());
+            
+            // Control and minimizing bar
+            LinearLayout controlBar = new LinearLayout(this);
+            controlBar.setOrientation(LinearLayout.HORIZONTAL);
+            controlBar.setBackgroundColor(getColor(R.color.divider));
+            controlBar.setPadding((int) dp(12), (int) dp(6), (int) dp(12), (int) dp(6));
+            controlBar.setGravity(Gravity.CENTER_VERTICAL);
+            
+            TextView label = new TextView(this);
+            label.setText("Split Panel Controls:");
+            label.setTextColor(getColor(R.color.text_secondary));
+            label.setTextSize(12);
+            label.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+            
+            TextView btnMinPrivate = new TextView(this);
+            btnMinPrivate.setText("Minimize Top");
+            btnMinPrivate.setTextColor(getColor(R.color.accent));
+            btnMinPrivate.setPadding((int) dp(10), (int) dp(6), (int) dp(10), (int) dp(6));
+            btnMinPrivate.setTextSize(12);
+            btnMinPrivate.setClickable(true);
+            btnMinPrivate.setBackgroundResource(getSelectableBackground());
+            btnMinPrivate.setOnClickListener(v -> minimizePrivatePane());
+            
+            TextView btnMinNormal = new TextView(this);
+            btnMinNormal.setText("Minimize Bottom");
+            btnMinNormal.setTextColor(getColor(R.color.c_offline));
+            btnMinNormal.setPadding((int) dp(10), (int) dp(6), (int) dp(10), (int) dp(6));
+            btnMinNormal.setTextSize(12);
+            btnMinNormal.setClickable(true);
+            btnMinNormal.setBackgroundResource(getSelectableBackground());
+            btnMinNormal.setOnClickListener(v -> minimizeNormalPane());
+            
+            controlBar.addView(label);
+            controlBar.addView(btnMinPrivate);
+            controlBar.addView(btnMinNormal);
+            
+            if (splitTabPrivate.webView.getParent() != null) {
+                ((ViewGroup) splitTabPrivate.webView.getParent()).removeView(splitTabPrivate.webView);
+            }
+            panePrivate.addView(splitTabPrivate.webView);
+            paneNormal.addView(splitTabNormal.webView);
+            
+            splitContainerLayout.addView(minBarPrivate);
+            splitContainerLayout.addView(panePrivate);
+            splitContainerLayout.addView(controlBar);
+            splitContainerLayout.addView(paneNormal);
+            splitContainerLayout.addView(minBarNormal);
+            
+            webviewContainer.addView(splitContainerLayout);
+            
+            normalPaneMinimized = false;
+            privatePaneMinimized = false;
+            
+            // Focus on top private pane url first
+            webview = splitTabPrivate.webView;
+            core = splitTabPrivate.core;
+            
+            splitTabNormal.core.loadUrl("https://duckduckgo.com"); // load DDG default in normal surf bottom panel
+            
+            toast("Split screen loaded! Top: Privacy | Bottom: Normal Surf");
+        }
+    }
+
+    private void minimizePrivatePane() {
+        if (privatePaneMinimized || normalPaneMinimized) return;
+        privatePaneMinimized = true;
+        panePrivate.setVisibility(View.GONE);
+        minBarPrivate.setVisibility(View.VISIBLE);
+        
+        // Give Normal Pane remaining space
+        LinearLayout.LayoutParams lp = (LinearLayout.LayoutParams) paneNormal.getLayoutParams();
+        lp.weight = 1f;
+        paneNormal.setLayoutParams(lp);
+        
+        // Switch control focus to Normal Pane
+        webview = splitTabNormal.webView;
+        core = splitTabNormal.core;
+        urlBar.setText(splitTabNormal.url);
+        updateNavButtons();
+        
+        toast("Privacy tab minimized!");
+    }
+
+    private void restorePrivatePane() {
+        if (!privatePaneMinimized) return;
+        privatePaneMinimized = false;
+        panePrivate.setVisibility(View.VISIBLE);
+        minBarPrivate.setVisibility(View.GONE);
+        
+        // Balanced 50/50 space
+        LinearLayout.LayoutParams lpNormal = (LinearLayout.LayoutParams) paneNormal.getLayoutParams();
+        lpNormal.weight = 1f;
+        paneNormal.setLayoutParams(lpNormal);
+        
+        LinearLayout.LayoutParams lpPrivate = (LinearLayout.LayoutParams) panePrivate.getLayoutParams();
+        lpPrivate.weight = 1f;
+        panePrivate.setLayoutParams(lpPrivate);
+        
+        // Switch control focus back to default active Private Pane
+        webview = splitTabPrivate.webView;
+        core = splitTabPrivate.core;
+        urlBar.setText(splitTabPrivate.url);
+        updateNavButtons();
+        
+        toast("Privacy tab restored!");
+    }
+
+    private void minimizeNormalPane() {
+        if (normalPaneMinimized || privatePaneMinimized) return;
+        normalPaneMinimized = true;
+        paneNormal.setVisibility(View.GONE);
+        minBarNormal.setVisibility(View.VISIBLE);
+        
+        // Give Private Pane remaining space
+        LinearLayout.LayoutParams lp = (LinearLayout.LayoutParams) panePrivate.getLayoutParams();
+        lp.weight = 1f;
+        panePrivate.setLayoutParams(lp);
+        
+        // Switch control focus to Private Pane
+        webview = splitTabPrivate.webView;
+        core = splitTabPrivate.core;
+        urlBar.setText(splitTabPrivate.url);
+        updateNavButtons();
+        
+        toast("Normal tab minimized!");
+    }
+
+    private void restoreNormalPane() {
+        if (!normalPaneMinimized) return;
+        normalPaneMinimized = false;
+        paneNormal.setVisibility(View.VISIBLE);
+        minBarNormal.setVisibility(View.GONE);
+        
+        // Balanced 50/50 space
+        LinearLayout.LayoutParams lpNormal = (LinearLayout.LayoutParams) paneNormal.getLayoutParams();
+        lpNormal.weight = 1f;
+        paneNormal.setLayoutParams(lpNormal);
+        
+        LinearLayout.LayoutParams lpPrivate = (LinearLayout.LayoutParams) panePrivate.getLayoutParams();
+        lpPrivate.weight = 1f;
+        panePrivate.setLayoutParams(lpPrivate);
+        
+        // Switch control focus to Private Pane
+        webview = splitTabPrivate.webView;
+        core = splitTabPrivate.core;
+        urlBar.setText(splitTabPrivate.url);
+        updateNavButtons();
+        
+        toast("Normal tab restored!");
+    }
+
+    // ========================================== LIFECYCLE ==========================================
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -105,29 +570,22 @@ public class MainActivity extends AppCompatActivity implements BrowserCore.Callb
         vm = new ViewModelProvider(this).get(MainViewModel.class);
 
         root = findViewById(R.id.root);
-        webview = findViewById(R.id.webview);
+        webviewContainer = findViewById(R.id.webview_container);
         toolbar = findViewById(R.id.toolbar);
         bindViews();
 
-        core = new BrowserCore(this, webview, this);
         bookmarks = new Bookmarks(this);
         aiClient = new AiClient(this);
-
-        webview.setGestureListener(new GestureWebView.GestureListener() {
-            @Override public void onEdgeBack()    { core.goBack(); }
-            @Override public void onEdgeForward() { core.goForward(); }
-        });
-        webview.setScrollListener((dx, dy, atTop) -> {
-            if (fullscreen) {
-                if (dy > 8) hideChrome();
-                else if (dy < -8 || atTop) showChrome();
-            }
-        });
 
         setupToolbar();
         setupHome();
         setupBottomSheet();
         buildAiPanel();
+
+        // Start with a fresh tab
+        Tab t = createNewTab(BrowserCore.HOME);
+        tabsList.add(t);
+        selectTab(0);
 
         if (savedInstanceState != null) {
             webview.restoreState(savedInstanceState);
@@ -174,10 +632,31 @@ public class MainActivity extends AppCompatActivity implements BrowserCore.Callb
 
     @Override protected void onResume() { super.onResume(); core.startNetworkMonitor(); }
     @Override protected void onPause() { super.onPause(); core.stopNetworkMonitor(); }
-    @Override protected void onSaveInstanceState(Bundle outState) { super.onSaveInstanceState(outState); webview.saveState(outState); }
     @Override protected void onDestroy() {
         if (snackPlayer != null) snackPlayer.close();
-        core.destroy();
+        
+        boolean clearOnExit = getPref().getBoolean("clear_on_exit", false);
+        for (Tab t : tabsList) {
+            if (clearOnExit) {
+                t.webView.clearCache(true);
+                t.webView.clearHistory();
+            }
+            t.core.destroy();
+        }
+        tabsList.clear();
+        
+        if (splitTabNormal != null) {
+            splitTabNormal.core.destroy();
+            splitTabNormal = null;
+        }
+
+        if (clearOnExit) {
+            android.webkit.CookieManager.getInstance().removeAllCookies(null);
+            android.webkit.CookieManager.getInstance().flush();
+            try {
+                android.webkit.WebStorage.getInstance().deleteAllData();
+            } catch (Exception ignored) { }
+        }
         super.onDestroy();
     }
 
@@ -274,7 +753,7 @@ public class MainActivity extends AppCompatActivity implements BrowserCore.Callb
             icon.setGravity(Gravity.CENTER);
             icon.setTextColor(0xFFFFFFFF);
             icon.setTextSize(TypedValue.COMPLEX_UNIT_SP, 22);
-            icon.setTypeface(android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD));
+            icon.setTypeface(android.graphics.Typeface.create(android.graphics.Typeface.BOLD));
             icon.setText(s.letter);
 
             TextView label = new TextView(this);
@@ -299,6 +778,8 @@ public class MainActivity extends AppCompatActivity implements BrowserCore.Callb
     }
 
     private void goHome() {
+        Tab activeTab = tabsList.get(currentTabIdx);
+        activeTab.isHome = true;
         isHome = true;
         vm.setHome(true);
         core.loadUrl(BrowserCore.HOME);
@@ -379,12 +860,30 @@ public class MainActivity extends AppCompatActivity implements BrowserCore.Callb
         boolean compat = getPref().getBoolean("compat_mode", false);
         boolean guard = getPref().getBoolean("cell_guard", true);
         boolean safe = getPref().getBoolean("safe_browsing", true);
+        boolean adblock = getPref().getBoolean("adblock_enabled", true);
+        boolean clearOnExit = getPref().getBoolean("clear_on_exit", false);
+
+        page.addView(makeToggle("Ad & Tracker Blocker", adblock, b -> {
+            for (Tab t : tabsList) {
+                t.core.setAdBlockEnabled(b);
+            }
+            toast(b ? "Adblock shields on" : "Adblock shields off");
+        }));
+        page.addView(makeDivider());
+
         page.addView(makeToggle("Compatibility Mode", compat, b -> { core.setCompatibilityMode(b); toast(b ? "Compatibility mode on" : "Strict mode on"); }));
         page.addView(makeDivider());
         page.addView(makeToggle("Cellular Guard", guard, b -> { core.setCellGuard(b); toast(b ? "Cellular guard on" : "Cellular guard off"); }));
         page.addView(makeDivider());
         page.addView(makeToggle("Safe Browsing", safe, b -> { core.setSafeBrowsing(b); toast(b ? "Safe browsing on" : "Safe browsing off"); }));
         page.addView(makeDivider());
+
+        page.addView(makeToggle("Clear Data on Exit", clearOnExit, b -> {
+            getPref().edit().putBoolean("clear_on_exit", b).apply();
+            toast(b ? "Auto-clear active" : "Auto-clear disabled");
+        }));
+        page.addView(makeDivider());
+
         page.addView(makeAction("Clear browsing data", R.color.danger, v -> confirmClearData()));
         return page;
     }
@@ -406,6 +905,10 @@ public class MainActivity extends AppCompatActivity implements BrowserCore.Callb
 
     private View buildToolRow(ToolRegistry.Tool t) {
         switch (t.id) {
+            case "split":
+                return makeAction("Toggle Split Screen", R.color.accent, v -> { hideSheet(); toggleSplitScreen(); });
+            case "tabs":
+                return makeAction("Manage Tabs", R.color.accent, v -> { hideSheet(); showTabsDialog(); });
             case "block":
                 return makeToggle("Click-to-Block", core.isBlockMode(), b -> {
                     core.setBlockMode(b);
@@ -483,6 +986,10 @@ public class MainActivity extends AppCompatActivity implements BrowserCore.Callb
         page.addView(makeAction("AI providers", R.color.c_agent, v -> showAiSettings()));
         page.addView(makeDivider());
         page.addView(makeAction("Bookmarks", R.color.c_offline, v -> showBookmarks()));
+        page.addView(makeDivider());
+        page.addView(makeAction("Cloud Sync (Backup/Restore)", R.color.accent, v -> showCloudSyncDialog()));
+        page.addView(makeDivider());
+        page.addView(makeAction("Proxy Routing (Tor/Custom)", R.color.accent, v -> showProxySettingsDialog()));
         page.addView(makeDivider());
         page.addView(makeAction("Search engine", R.color.accent, v -> chooseSearchEngine()));
         page.addView(makeDivider());
@@ -617,64 +1124,83 @@ public class MainActivity extends AppCompatActivity implements BrowserCore.Callb
         add.setBackgroundResource(getSelectableBackground());
         add.setOnClickListener(v -> {
             dlg.dismiss();
-            promptAddCustomTool();
+            showAddCustomToolDialog();
         });
-        ((LinearLayout) dlg.findViewById(android.R.id.content).getParent()).addView(add);
+        list.addView(add);
     }
 
-    private void refreshCustomizeList(LinearLayout list) {
-        list.removeAllViews();
-        for (ToolRegistry.Tool t : ToolRegistry.load(this)) {
+    private void refreshCustomizeList(LinearLayout container) {
+        container.removeAllViews();
+        List<ToolRegistry.Tool> tools = ToolRegistry.load(this);
+        for (int i = 0; i < tools.size(); i++) {
+            final ToolRegistry.Tool t = tools.get(i);
             final String id = t.id;
-            LinearLayout row = new LinearLayout(this);
-            row.setOrientation(LinearLayout.HORIZONTAL);
-            row.setGravity(Gravity.CENTER_VERTICAL);
-            row.setPadding((int) dp(4), (int) dp(8), (int) dp(4), (int) dp(8));
 
-            ImageButton up = new ImageButton(this);
-            up.setImageResource(R.drawable.ic_back);
-            up.setRotation(90f);
-            up.setBackground(null);
-            up.setOnClickListener(v -> { ToolRegistry.moveUp(this, id); refreshCustomizeList(list); });
-
-            ImageButton down = new ImageButton(this);
-            down.setImageResource(R.drawable.ic_forward);
-            down.setRotation(-90f);
-            down.setBackground(null);
-            down.setOnClickListener(v -> { ToolRegistry.moveDown(this, id); refreshCustomizeList(list); });
+            LinearLayout item = new LinearLayout(this);
+            item.setOrientation(LinearLayout.HORIZONTAL);
+            item.setGravity(Gravity.CENTER_VERTICAL);
+            item.setPadding((int) dp(8), (int) dp(4), (int) dp(8), (int) dp(4));
 
             CheckBox cb = new CheckBox(this);
+            cb.setChecked(t.visible);
             cb.setText(t.label);
             cb.setTextColor(getColor(R.color.text_primary));
-            cb.setChecked(t.visible);
             cb.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-            cb.setOnCheckedChangeListener((b, checked) -> ToolRegistry.setVisible(this, id, checked));
 
-            row.addView(up);
-            row.addView(down);
-            row.addView(cb);
+            ImageButton up = new ImageButton(this);
+            up.setImageResource(android.R.drawable.arrow_up_float);
+            up.setBackground(null);
+            up.setAlpha(i == 0 ? 0.25f : 1f);
+            up.setEnabled(i > 0);
+            up.setOnClickListener(v -> { ToolRegistry.moveUp(this, id); refreshCustomizeList(container); });
 
-            if (t.url != null) { // custom tool: allow delete
+            ImageButton down = new ImageButton(this);
+            down.setImageResource(android.R.drawable.arrow_down_float);
+            down.setBackground(null);
+            down.setAlpha(i == tools.size() - 1 ? 0.25f : 1f);
+            down.setEnabled(i < tools.size() - 1);
+            down.setOnClickListener(v -> { ToolRegistry.moveDown(this, id); refreshCustomizeList(container); });
+
+            item.addView(cb);
+            if (id.startsWith("custom_")) {
                 ImageButton del = new ImageButton(this);
                 del.setImageResource(R.drawable.ic_close);
                 del.setBackground(null);
                 del.setOnClickListener(v -> {
-                    ToolRegistry.removeCustom(this, id);
-                    refreshCustomizeList(list);
+                    new AlertDialog.Builder(this)
+                            .setTitle("Delete custom tool?")
+                            .setMessage(t.label)
+                            .setPositiveButton("Delete", (d, w) -> {
+                                ToolRegistry.removeCustom(this, id);
+                                refreshCustomizeList(container);
+                            })
+                            .setNegativeButton("Cancel", null)
+                            .show();
                 });
-                row.addView(del);
+                item.addView(del);
+            } else {
+                item.addView(up);
+                item.addView(down);
             }
-            list.addView(row);
-            list.addView(makeDivider());
+
+            cb.setOnCheckedChangeListener((b, checked) -> ToolRegistry.setVisible(this, id, checked));
+            container.addView(item);
+            container.addView(makeDivider());
         }
     }
 
-    private void promptAddCustomTool() {
+    private void showAddCustomToolDialog() {
         final EditText name = new EditText(this);
-        name.setHint("Label (e.g. YouTube)");
+        name.setHint("Tool name");
+        name.setSingleLine(true);
+        name.setPadding((int) dp(12), (int) dp(10), (int) dp(12), (int) dp(10));
+
         final EditText url = new EditText(this);
-        url.setHint("https://…");
+        url.setHint("https://...");
         url.setInputType(InputType.TYPE_TEXT_VARIATION_URI);
+        url.setSingleLine(true);
+        url.setPadding((int) dp(12), (int) dp(10), (int) dp(12), (int) dp(10));
+
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
         box.addView(name);
@@ -691,345 +1217,375 @@ public class MainActivity extends AppCompatActivity implements BrowserCore.Callb
                 .show();
     }
 
+    // --------------------------- CLOUD SYNC ---------------------------
+
+    private void showCloudSyncDialog() {
+        CloudSyncClient syncClient = new CloudSyncClient(this);
+
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        int pad = (int) dp(16);
+        layout.setPadding(pad, pad, pad, pad);
+
+        TextView desc = new TextView(this);
+        desc.setText("Sync your Bookmarks and Notepad notes to an external REST service of your choice.");
+        desc.setTextSize(13);
+        desc.setTextColor(getColor(R.color.text_secondary));
+        desc.setPadding(0, 0, 0, (int) dp(10));
+        layout.addView(desc);
+
+        final EditText ep = new EditText(this);
+        ep.setHint("REST API Endpoint URL (POST/GET)");
+        ep.setText(syncClient.getEndpoint());
+        ep.setSingleLine(true);
+        ep.setPadding((int) dp(8), (int) dp(12), (int) dp(8), (int) dp(12));
+        layout.addView(ep);
+
+        final EditText token = new EditText(this);
+        token.setHint("Bearer Authorization Token (Optional)");
+        token.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        token.setText(syncClient.getToken());
+        token.setSingleLine(true);
+        token.setPadding((int) dp(8), (int) dp(12), (int) dp(8), (int) dp(12));
+        layout.addView(token);
+
+        LinearLayout btnContainer = new LinearLayout(this);
+        btnContainer.setOrientation(LinearLayout.HORIZONTAL);
+        btnContainer.setGravity(Gravity.CENTER);
+        btnContainer.setPadding(0, (int) dp(14), 0, 0);
+
+        TextView btnBackup = new TextView(this);
+        btnBackup.setText("↑ Backup (Push)");
+        btnBackup.setTextColor(getColor(R.color.accent));
+        btnBackup.setTextSize(15);
+        btnBackup.setPadding((int) dp(12), (int) dp(10), (int) dp(12), (int) dp(10));
+        btnBackup.setClickable(true);
+        btnBackup.setBackgroundResource(getSelectableBackground());
+        btnBackup.setOnClickListener(v -> {
+            syncClient.setEndpoint(ep.getText().toString());
+            syncClient.setToken(token.getText().toString());
+            toast("Syncing up…");
+            syncClient.backup(this, bookmarks, new CloudSyncClient.Callback() {
+                @Override public void onSuccess(String msg) { toast(msg); }
+                @Override public void onError(String err) { toast(err); }
+            });
+        });
+
+        TextView btnRestore = new TextView(this);
+        btnRestore.setText("↓ Restore (Pull)");
+        btnRestore.setTextColor(getColor(R.color.active));
+        btnRestore.setTextSize(15);
+        btnRestore.setPadding((int) dp(12), (int) dp(10), (int) dp(12), (int) dp(10));
+        btnRestore.setClickable(true);
+        btnRestore.setBackgroundResource(getSelectableBackground());
+        btnRestore.setOnClickListener(v -> {
+            syncClient.setEndpoint(ep.getText().toString());
+            syncClient.setToken(token.getText().toString());
+            
+            new AlertDialog.Builder(this)
+                .setTitle("Restore Cloud Data?")
+                .setMessage("This will replace your current Bookmarks and Notepad content with the cloud copy.")
+                .setPositiveButton("Restore", (d, w) -> {
+                    toast("Fetching down…");
+                    syncClient.restore(this, bookmarks, new CloudSyncClient.Callback() {
+                        @Override public void onSuccess(String msg) { toast(msg); }
+                        @Override public void onError(String err) { toast(err); }
+                    });
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+        });
+
+        btnContainer.addView(btnBackup);
+        View spacer = new View(this);
+        spacer.setLayoutParams(new LinearLayout.LayoutParams((int) dp(16), 1));
+        btnContainer.addView(spacer);
+        btnContainer.addView(btnRestore);
+
+        layout.addView(btnContainer);
+
+        new AlertDialog.Builder(this)
+                .setTitle("Cloud Backup & Sync")
+                .setView(layout)
+                .setPositiveButton("Save Settings", (d, w) -> {
+                    syncClient.setEndpoint(ep.getText().toString());
+                    syncClient.setToken(token.getText().toString());
+                    toast("Sync settings saved");
+                    rebuildSettingsPage();
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    // --------------------------- PROXY ROUTING ---------------------------
+
+    private void showProxySettingsDialog() {
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        int pad = (int) dp(16);
+        layout.setPadding(pad, pad, pad, pad);
+
+        TextView desc = new TextView(this);
+        desc.setText("Route your browsing traffic through a local SOCKS5 proxy (like Tor/Orbot) or HTTP proxy.");
+        desc.setTextSize(13);
+        desc.setTextColor(getColor(R.color.text_secondary));
+        desc.setPadding(0, 0, 0, (int) dp(10));
+        layout.addView(desc);
+
+        // Toggle to enable/disable
+        boolean isProxyEnabled = getPreferences(Context.MODE_PRIVATE).getBoolean("proxy_enabled", false);
+        View toggleRow = makeToggle("Enable Proxy Route", isProxyEnabled, b -> {
+            getPreferences(Context.MODE_PRIVATE).edit().putBoolean("proxy_enabled", b).apply();
+        });
+        layout.addView(toggleRow);
+
+        // Spinner to select Proxy Type (SOCKS or HTTP)
+        TextView typeLabel = new TextView(this);
+        typeLabel.setText("Proxy Type");
+        typeLabel.setTextColor(getColor(R.color.text_primary));
+        typeLabel.setTextSize(14);
+        typeLabel.setPadding(0, (int) dp(10), 0, (int) dp(4));
+        layout.addView(typeLabel);
+
+        final Spinner typeSpinner = new Spinner(this);
+        String[] types = {"SOCKS5 (SOCKS)", "HTTP"};
+        final String[] typeSchemes = {"socks", "http"};
+        ArrayAdapter<String> adapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, types);
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        typeSpinner.setAdapter(adapter);
+        
+        String savedType = getPreferences(Context.MODE_PRIVATE).getString("proxy_type", "socks");
+        typeSpinner.setSelection(savedType.equals("http") ? 1 : 0);
+        layout.addView(typeSpinner);
+
+        final EditText epHost = new EditText(this);
+        epHost.setHint("Proxy Host (e.g. 127.0.0.1)");
+        epHost.setText(getPreferences(Context.MODE_PRIVATE).getString("proxy_host", "127.0.0.1"));
+        epHost.setSingleLine(true);
+        epHost.setPadding((int) dp(8), (int) dp(12), (int) dp(8), (int) dp(12));
+        layout.addView(epHost);
+
+        final EditText epPort = new EditText(this);
+        epPort.setHint("Proxy Port (e.g. 9050 for Tor)");
+        epPort.setInputType(InputType.TYPE_CLASS_NUMBER);
+        epPort.setText(String.valueOf(getPreferences(Context.MODE_PRIVATE).getInt("proxy_port", 9050)));
+        epPort.setSingleLine(true);
+        epPort.setPadding((int) dp(8), (int) dp(12), (int) dp(8), (int) dp(12));
+        layout.addView(epPort);
+
+        new AlertDialog.Builder(this)
+                .setTitle("Proxy Routing (Tor/Custom)")
+                .setView(layout)
+                .setPositiveButton("Save & Apply", (d, w) -> {
+                    String host = epHost.getText().toString().trim();
+                    String portStr = epPort.getText().toString().trim();
+                    int port = 9050;
+                    try { port = Integer.parseInt(portStr); } catch (Exception ignored) {}
+                    String typeScheme = typeSchemes[typeSpinner.getSelectedItemPosition()];
+
+                    getPreferences(Context.MODE_PRIVATE).edit()
+                            .putString("proxy_host", host)
+                            .putInt("proxy_port", port)
+                            .putString("proxy_type", typeScheme)
+                            .apply();
+
+                    // Apply to ALL cores dynamically
+                    for (Tab t : tabsList) {
+                        t.core.applyProxySettings();
+                    }
+                    if (splitTabNormal != null) {
+                        splitTabNormal.core.applyProxySettings();
+                    }
+                    toast("Proxy settings updated");
+                    rebuildSettingsPage();
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
     // --------------------------- TRANSLATION ---------------------------
 
     private void showTranslateLangPicker() {
         String current = core.getTranslateTarget();
         int sel = 0;
-        for (int i = 0; i < LANG_CODES.length; i++) if (LANG_CODES[i].equals(current)) sel = i;
+        for (int i = 0; i < LANG_CODES.length; i++) {
+            if (LANG_CODES[i].equalsIgnoreCase(current)) { sel = i; break; }
+        }
         new AlertDialog.Builder(this)
-                .setTitle("Translation language")
-                .setSingleChoiceItems(LANG_NAMES, sel, (d, which) -> {
+                .setTitle("Auto-translate target")
+                .setSingleChoiceItems(LANG_NAMES, sel, (dlg, which) -> {
                     core.setTranslateTarget(LANG_CODES[which]);
-                    toast("Translate to " + LANG_NAMES[which]);
-                    d.dismiss();
+                    toast("Target set to " + LANG_NAMES[which]);
+                    rebuildSettingsPage();
+                    dlg.dismiss();
                 })
-                .setNegativeButton("Cancel", null)
                 .show();
     }
 
-    // --------------------------- AI PANEL ---------------------------
-
-    private void buildAiPanel() {
-        aiPanel = new LinearLayout(this);
-        int w = (int) Math.min(dp(330), getResources().getDisplayMetrics().widthPixels * 0.86);
-        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(w, FrameLayout.LayoutParams.MATCH_PARENT);
-        lp.gravity = Gravity.END;
-        aiPanel.setLayoutParams(lp);
-        aiPanel.setOrientation(LinearLayout.VERTICAL);
-        aiPanel.setBackgroundColor(getColor(R.color.surface));
-        aiPanel.setElevation(dp(20));
-
-        LinearLayout header = new LinearLayout(this);
-        header.setOrientation(LinearLayout.HORIZONTAL);
-        header.setGravity(Gravity.CENTER_VERTICAL);
-        header.setBackgroundColor(getColor(R.color.primary));
-        header.setPadding((int) dp(8), (int) dp(8), (int) dp(4), (int) dp(8));
-
-        aiSpinner = new Spinner(this);
-        aiSpinner.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        aiSpinner.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener() {
-            @Override public void onItemSelected(android.widget.AdapterView<?> parent, View view, int pos, long idl) {
-                if (!aiSpinnerReady) return;
-                List<AiClient.Provider> ps = aiClient.getProviders();
-                if (pos >= 0 && pos < ps.size()) {
-                    aiClient.setActiveProvider(ps.get(pos).id);
-                }
-            }
-            @Override public void onNothingSelected(android.widget.AdapterView<?> parent) { }
-        });
-        ImageButton settings = new ImageButton(this);
-        settings.setImageResource(R.drawable.ic_menu);
-        settings.setBackground(null);
-        settings.setOnClickListener(v -> showAiSettings());
-        ImageButton close = new ImageButton(this);
-        close.setImageResource(R.drawable.ic_close);
-        close.setBackground(null);
-        close.setOnClickListener(v -> hideAiPanel());
-        header.addView(aiSpinner);
-        header.addView(settings);
-        header.addView(close);
-        aiPanel.addView(header);
-
-        aiScroll = new ScrollView(this);
-        aiMessages = new LinearLayout(this);
-        aiMessages.setOrientation(LinearLayout.VERTICAL);
-        int pad = (int) dp(12);
-        aiMessages.setPadding(pad, pad, pad, pad);
-        aiScroll.addView(aiMessages);
-        aiScroll.setLayoutParams(new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
-        aiPanel.addView(aiScroll);
-
-        LinearLayout inputRow = new LinearLayout(this);
-        inputRow.setOrientation(LinearLayout.HORIZONTAL);
-        inputRow.setGravity(Gravity.CENTER_VERTICAL);
-        inputRow.setBackgroundColor(getColor(R.color.surface_elevated));
-        inputRow.setPadding((int) dp(8), (int) dp(8), (int) dp(8), (int) dp(8));
-        aiInput = new EditText(this);
-        aiInput.setHint("Ask anything…");
-        aiInput.setTextColor(getColor(R.color.text_primary));
-        aiInput.setHintTextColor(getColor(R.color.text_secondary));
-        aiInput.setBackgroundColor(0);
-        aiInput.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
-        aiInput.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        aiInput.setImeOptions(EditorInfo.IME_ACTION_SEND);
-        aiInput.setMaxLines(4);
-        ImageButton send = new ImageButton(this);
-        send.setImageResource(R.drawable.ic_send);
-        send.setBackground(null);
-        Runnable doSend = this::sendAi;
-        send.setOnClickListener(v -> doSend.run());
-        aiInput.setOnEditorActionListener((v, actionId, e) -> { if (actionId == EditorInfo.IME_ACTION_SEND) { doSend.run(); return true; } return false; });
-        inputRow.addView(aiInput);
-        inputRow.addView(send);
-        aiPanel.addView(inputRow);
-
-        root.addView(aiPanel);
-        aiPanel.setVisibility(View.GONE);
-        rebuildProviderSpinner();
+    private void rebuildSettingsPage() {
+        if (sheetPageViews == null) return;
+        ScrollView sv = wrapScroll(buildSettingsPage());
+        boolean wasVisible = sheetPageViews[2].getVisibility() == View.VISIBLE;
+        sheetPages.removeView(sheetPageViews[2]);
+        sheetPages.addView(sv, 2);
+        sheetPageViews[2] = sv;
+        sv.setVisibility(wasVisible ? View.VISIBLE : View.GONE);
+        applySheetHeightCap();
     }
 
-    private void rebuildProviderSpinner() {
-        if (aiSpinner == null) return;
-        List<AiClient.Provider> ps = aiClient.getProviders();
-        String active = aiClient.getActiveProviderId();
-        String[] names = new String[ps.size()];
-        int sel = 0;
-        for (int i = 0; i < ps.size(); i++) {
-            names[i] = ps.get(i).name;
-            if (ps.get(i).id.equals(active)) sel = i;
-        }
-        ArrayAdapter<String> a = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, names);
-        a.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        aiSpinnerReady = false;
-        aiSpinner.setAdapter(a);
-        if (sel >= 0 && sel < names.length) aiSpinner.setSelection(sel);
-        aiSpinnerReady = true;
-    }
-
-    private void showAiPanel() {
-        aiPanelVisible = true;
-        vm.setAiPanelVisible(true);
-        aiPanel.setVisibility(View.VISIBLE);
-        aiPanel.setTranslationX(aiPanel.getWidth() + dp(8));
-        aiPanel.post(() -> aiPanel.animate().translationX(0f).setDuration(220).start());
-        if (aiMessages.getChildCount() == 0) {
-            addBubble(false, "Hi! I'm your in-browser AI assistant.\n"
-                    + (aiClient.isConfigured()
-                        ? "Using " + aiClient.getActiveProvider().name + ". Ask away."
-                        : "Pick a provider above, then set your key in the ⋮ menu."));
-        }
-        aiInput.requestFocus();
-    }
-
-    private void hideAiPanel() {
-        aiPanelVisible = false;
-        vm.setAiPanelVisible(false);
-        aiPanel.animate().translationX(aiPanel.getWidth() + dp(8)).setDuration(200)
-                .withEndAction(() -> aiPanel.setVisibility(View.GONE)).start();
-        hideKeyboard(aiInput);
-    }
-
-    private TextView addBubble(boolean user, String text) {
-        TextView tv = new TextView(this);
-        tv.setText(text);
-        tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
-        int px = (int) dp(12);
-        tv.setPadding(px, (int) dp(8), px, (int) dp(8));
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        lp.gravity = user ? Gravity.END : Gravity.START;
-        lp.bottomMargin = (int) dp(8);
-        tv.setLayoutParams(lp);
-        if (user) {
-            tv.setBackground(makeColorDrawable(getColor(R.color.accent)));
-            tv.setTextColor(getColor(R.color.text_inverse));
-        } else {
-            tv.setBackground(makeColorDrawable(getColor(R.color.surface_elevated)));
-            tv.setTextColor(getColor(R.color.text_primary));
-        }
-        aiMessages.addView(tv);
-        aiScroll.post(() -> aiScroll.fullScroll(View.FOCUS_DOWN));
-        return tv;
-    }
-
-    private Drawable makeColorDrawable(int color) {
-        android.graphics.drawable.GradientDrawable d = new android.graphics.drawable.GradientDrawable();
-        d.setColor(color);
-        d.setCornerRadius(dp(14));
-        return d;
-    }
-
-    private void sendAi() {
-        String text = aiInput.getText().toString().trim();
-        if (text.isEmpty()) return;
-        aiInput.setText("");
-        addBubble(true, text);
-        vm.addAiMessage(true, text);
-        if (!aiClient.isConfigured()) {
-            addBubble(false, "Set an endpoint/key for " + aiClient.getActiveProvider().name + " via the ⋮ menu.");
-            return;
-        }
-        final TextView thinking = addBubble(false, "Thinking… (" + aiClient.getActiveProvider().name + ")");
-        aiClient.send(new ArrayList<>(vm.getAiHistory()), new AiClient.Callback() {
-            @Override public void onReply(String reply) {
-                aiMessages.removeView(thinking);
-                addBubble(false, reply);
-                vm.addAiMessage(false, reply);
-            }
-            @Override public void onError(String message) {
-                aiMessages.removeView(thinking);
-                addBubble(false, "Error: " + message);
-            }
-        });
-    }
-
-    private void showAiSettings() {
-        final LinearLayout box = new LinearLayout(this);
-        box.setOrientation(LinearLayout.VERTICAL);
-        box.setPadding((int) dp(20), (int) dp(12), (int) dp(20), (int) dp(4));
-
-        final AiClient.Provider active = aiClient.getActiveProvider();
-        final EditText ep = new EditText(this);
-        ep.setHint("Endpoint (chat/completions URL)");
-        ep.setInputType(InputType.TYPE_TEXT_VARIATION_URI);
-        ep.setText(aiClient.getEndpoint());
-        final EditText ek = new EditText(this);
-        ek.setHint("API key");
-        ek.setInputType(InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        ek.setText(aiClient.getKey());
-        final EditText em = new EditText(this);
-        em.setHint("Model");
-        em.setText(aiClient.getModel());
-        box.addView(makeStatus("Active provider: " + active.name));
-        box.addView(ep);
-        box.addView(ek);
-        box.addView(em);
-
-        AlertDialog dlg = new AlertDialog.Builder(this)
-                .setTitle("AI providers")
-                .setMessage("Edit credentials for " + active.name + ". Use the dropdown in the panel to switch providers.")
-                .setView(box)
-                .setPositiveButton("Save", (d, w) -> {
-                    aiClient.setEndpoint(ep.getText().toString().trim());
-                    aiClient.setKey(ek.getText().toString().trim());
-                    aiClient.setModel(em.getText().toString().trim());
-                    toast("Saved for " + active.name);
-                })
-                .setNeutralButton("Add custom", null)
-                .setNegativeButton("Done", null)
-                .create();
-        dlg.show();
-        // Override neutral so the dialog stays open is not needed; just open sub-dialog.
-        dlg.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(b -> {
-            dlg.dismiss();
-            promptAddCustomProvider();
-        });
-    }
-
-    private void promptAddCustomProvider() {
-        final EditText name = new EditText(this);
-        name.setHint("Provider name");
-        final EditText ep = new EditText(this);
-        ep.setHint("https://…/chat/completions");
-        ep.setInputType(InputType.TYPE_TEXT_VARIATION_URI);
-        final EditText em = new EditText(this);
-        em.setHint("Model");
-        LinearLayout box = new LinearLayout(this);
-        box.setOrientation(LinearLayout.VERTICAL);
-        box.addView(name);
-        box.addView(ep);
-        box.addView(em);
-        new AlertDialog.Builder(this)
-                .setTitle("Add custom provider")
-                .setView(box)
-                .setPositiveButton("Add", (d, w) -> {
-                    aiClient.addCustomProvider(name.getText().toString(), ep.getText().toString(), em.getText().toString());
-                    rebuildProviderSpinner();
-                    toast("Provider added");
-                })
-                .setNegativeButton("Cancel", null)
-                .show();
-    }
-
-    // --------------------------- FULLSCREEN ---------------------------
-
-    private void setFullscreen(boolean on) {
-        fullscreen = on;
-        vm.setFullscreen(on);
-        WindowInsetsControllerCompat controller = WindowCompat.getInsetsController(getWindow(), getWindow().getDecorView());
-        WindowCompat.setDecorFitsSystemWindows(getWindow(), !on);
-        if (on) {
-            controller.hide(WindowInsetsCompat.Type.systemBars());
-            controller.setSystemBarsBehavior(WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
-            hideChrome();
-            toast("Fullscreen — scroll up to show controls");
-        } else {
-            controller.show(WindowInsetsCompat.Type.systemBars());
-            showChrome();
-        }
-    }
-
-    private void hideChrome() {
-        if (toolbar == null) return;
-        toolbar.animate().translationY(-toolbar.getHeight() - dp(8)).setDuration(180).start();
-        if (progress != null) progress.setVisibility(View.GONE);
-    }
-
-    private void showChrome() {
-        if (toolbar == null) return;
-        toolbar.animate().translationY(0f).setDuration(180).start();
-    }
-
-    // --------------------------- DIALOGS ---------------------------
+    // --------------------------- SEARCH ENGINE ---------------------------
 
     private void chooseSearchEngine() {
-        String current = getPref().getString("search_engine", "https://duckduckgo.com/?q=%s");
-        int selected = 0;
-        for (int i = 0; i < ENGINE_TEMPLATES.length; i++) if (ENGINE_TEMPLATES[i].equals(current)) { selected = i; break; }
+        String current = getPreferences(Context.MODE_PRIVATE).getString("search_engine", ENGINE_TEMPLATES[0]);
+        int sel = 0;
+        for (int i = 0; i < ENGINE_TEMPLATES.length; i++) {
+            if (ENGINE_TEMPLATES[i].equals(current)) { sel = i; break; }
+        }
         new AlertDialog.Builder(this)
-                .setTitle("Search engine")
-                .setSingleChoiceItems(ENGINE_NAMES, selected, (d, which) -> {
-                    core.setSearchEngine(ENGINE_TEMPLATES[which]); toast(ENGINE_NAMES[which]); d.dismiss();
+                .setTitle("Default search engine")
+                .setSingleChoiceItems(ENGINE_NAMES, sel, (dlg, which) -> {
+                    core.setSearchEngine(ENGINE_TEMPLATES[which]);
+                    toast("Search set to " + ENGINE_NAMES[which]);
+                    dlg.dismiss();
                 })
-                .setNegativeButton("Cancel", null).show();
+                .show();
     }
 
-    private void openAssetEditor(final String title, String initial, final java.util.function.Consumer<String> onSave) {
-        final EditText et = new EditText(this);
-        et.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
-        et.setTypeface(android.graphics.Typeface.MONOSPACE);
-        et.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-        et.setText(initial != null ? initial : "");
-        et.setSelection(et.getText().length());
-        et.setMinLines(8);
-        et.setPadding((int) dp(16), (int) dp(12), (int) dp(16), (int) dp(12));
-        new AlertDialog.Builder(this).setTitle(title).setView(et)
-                .setPositiveButton("Save", (d, w) -> { onSave.accept(et.getText().toString()); toast(title + " saved"); })
-                .setNegativeButton("Cancel", null).show();
+    // --------------------------- MEDIA & DOWNLOADS ---------------------------
+
+    private void downloadMedia() {
+        core.scanForMedia(urls -> {
+            if (urls.isEmpty()) { toast("No media sniffed on this page"); return; }
+            String[] arr = urls.toArray(new String[0]);
+            new AlertDialog.Builder(this)
+                    .setTitle("Download media")
+                    .setItems(arr, (d, which) -> {
+                        String url = arr[which];
+                        com.minibrowser.download.DownloadManager.get().enqueue(url, core.currentUrl(), null);
+                        toast("Enqueued: " + url.substring(Math.max(0, url.length() - 25)));
+                    }).show();
+        });
+    }
+
+    private void playMedia() {
+        core.scanForMedia(urls -> {
+            if (urls.isEmpty()) { toast("No playable media found"); return; }
+            String[] arr = urls.toArray(new String[0]);
+            new AlertDialog.Builder(this)
+                    .setTitle("Play media in ExoPlayer")
+                    .setItems(arr, (d, which) -> {
+                        String url = arr[which];
+                        Intent intent = new Intent(this, com.minibrowser.media.MediaPlayerActivity.class);
+                        intent.setData(Uri.parse(url));
+                        startActivity(intent);
+                    }).show();
+        });
+    }
+
+    private void playSnack() {
+        core.scanForMedia(urls -> {
+            if (urls.isEmpty()) { toast("No media to play in Snack"); return; }
+            String[] arr = urls.toArray(new String[0]);
+            new AlertDialog.Builder(this)
+                    .setTitle("Play in floating snack")
+                    .setItems(arr, (d, which) -> {
+                        String url = arr[which];
+                        if (snackPlayer == null) snackPlayer = new SnackPlayer(this, root);
+                        snackPlayer.play(url, "Snack: " + currentTitle);
+                    }).show();
+        });
     }
 
     private void showOfflineList() {
-        final List<File> pages = core.listOfflinePages();
-        if (pages.isEmpty()) { toast("No offline pages yet"); return; }
-        String[] names = new String[pages.size()];
-        for (int i = 0; i < pages.size(); i++) names[i] = pages.get(i).getName().replace(".html", "");
-        new AlertDialog.Builder(this).setTitle("Offline pages").setItems(names, (d, which) -> { core.loadOffline(pages.get(which)); hideSheet(); }).setNegativeButton("Close", null).show();
+        List<File> files = core.listOfflinePages();
+        if (files.isEmpty()) { toast("No offline pages. Save some via Tools Menu."); return; }
+        String[] names = new String[files.size()];
+        for (int i = 0; i < files.size(); i++) names[i] = files.get(i).getName();
+        new AlertDialog.Builder(this)
+                .setTitle("Offline Pages")
+                .setItems(names, (d, which) -> {
+                    hideSheet();
+                    core.loadOffline(files.get(which));
+                }).show();
     }
 
     private void confirmClearData() {
-        new AlertDialog.Builder(this).setTitle("Clear browsing data").setMessage("Erase cache, cookies, history and storage?")
-                .setPositiveButton("Clear", (d, w) -> { core.clearAllPrivateData(); toast("Data cleared"); })
-                .setNegativeButton("Cancel", null).show();
+        new AlertDialog.Builder(this)
+                .setTitle("Clear all private data?")
+                .setMessage("This will wipe cache, history, cookies, and web storage.")
+                .setPositiveButton("Clear", (d, w) -> {
+                    core.clearAllPrivateData();
+                    toast("All private data wiped");
+                    hideSheet();
+                    goHome();
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    // --------------------------- SOCIAL & AUX ---------------------------
+
+    private void shareCurrent() {
+        String url = core.currentUrl();
+        if (url == null || url.startsWith("about:")) { toast("Nothing to share"); return; }
+        Intent i = new Intent(Intent.ACTION_SEND);
+        i.setType("text/plain");
+        i.putExtra(Intent.EXTRA_TEXT, url);
+        startActivity(Intent.createChooser(i, "Share URL"));
+    }
+
+    private void copyCurrentUrl() {
+        String url = core.currentUrl();
+        if (url == null || url.startsWith("about:")) { toast("No URL to copy"); return; }
+        android.content.ClipboardManager cb = (android.content.ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+        if (cb != null) {
+            cb.setPrimaryClip(android.content.ClipData.newPlainText("URL", url));
+            toast("URL copied to clipboard");
+        }
+    }
+
+    private void updateBookmarkIcon(String url) {
+        if (url == null || url.startsWith("about:")) {
+            btnBookmark.setVisibility(View.GONE);
+            return;
+        }
+        btnBookmark.setVisibility(View.VISIBLE);
+        boolean has = bookmarks.contains(url);
+        btnBookmark.setImageResource(has ? R.drawable.ic_bookmark_filled : R.drawable.ic_bookmark_outline);
+    }
+
+    private void toggleBookmark() {
+        String url = core.currentUrl();
+        if (url == null || url.startsWith("about:")) return;
+        if (bookmarks.contains(url)) {
+            bookmarks.remove(url);
+            toast("Removed bookmark");
+        } else {
+            bookmarks.add(currentTitle, url);
+            toast("Bookmarked page");
+        }
+        updateBookmarkIcon(url);
     }
 
     private void showAbout() {
-        new AlertDialog.Builder(this).setTitle("MiniBrowser")
-                .setMessage("MiniBrowser v17\n\nPrivacy-first browser + downloader.\n"
-                        + "• Multi-provider AI sidebar (OpenAI-compat)\n"
-                        + "• HLS/DASH download + player (PiP) + snack player\n"
-                        + "• SurfingKeys vim nav + auto-translate\n"
-                        + "• Customizable tools & ad/tracker blocking\n\n"
-                        + "Built with Gradle + AndroidX.")
+        new AlertDialog.Builder(this)
+                .setTitle("About MiniBrowser")
+                .setMessage("MiniBrowser is a lightweight, privacy-focused Android Web Browser.\n\n"
+                        + "Key features:\n"
+                        + "• Dynamic Multi-Tab Support\n"
+                        + "• Dual Mode Split-Screen (Normal Surf vs Privacy Top-Bottom Stack)\n"
+                        + "• Dynamic Panel Minimizing / Collapsing with Quick-Restore Bars\n"
+                        + "• Native Force-Dark Algorithmic Darkening\n"
+                        + "• Customized Native Error Screens\n"
+                        + "• In-App Draggable Floating Snack Player\n"
+                        + "• Tor SOCKS5 / HTTP Proxy overrides\n"
+                        + "• Thread-safe ad/tracker blocking with toggle shields\n"
+                        + "• Keystore-encrypted AI API key storage\n"
+                        + "• Multi-provider AI Chat integration\n"
+                        + "• Cloud Sync backup/restores\n"
+                        + "• Full gesture navigation\n"
+                        + "• In-house HLS/DASH media downloading\n\n"
+                        + "• Built with Gradle + AndroidX.")
                 .setPositiveButton("OK", null).show();
     }
 
@@ -1041,166 +1597,222 @@ public class MainActivity extends AppCompatActivity implements BrowserCore.Callb
                 .setNegativeButton("Cancel", null).show();
     }
 
-    private void shareCurrent() {
-        String url = core.currentUrl();
-        if (url == null || url.startsWith("about:")) { toast("Nothing to share"); return; }
-        Intent send = new Intent(Intent.ACTION_SEND);
-        send.setType("text/plain");
-        send.putExtra(Intent.EXTRA_TEXT, url);
-        startActivity(Intent.createChooser(send, "Share via"));
-    }
+    // --------------------------- AI CHAT PANEL ---------------------------
 
-    private void copyCurrentUrl() {
-        String url = core.currentUrl();
-        if (url == null || url.startsWith("about:")) { toast("Nothing to copy"); return; }
-        android.content.ClipboardManager cm = (android.content.ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
-        cm.setPrimaryClip(android.content.ClipData.newPlainText("url", url));
-        toast("URL copied");
-    }
+    private void buildAiPanel() {
+        aiPanel = findViewById(R.id.ai_panel);
+        aiSpinner = findViewById(R.id.ai_spinner);
+        aiScroll = findViewById(R.id.ai_scroll);
+        aiMessages = findViewById(R.id.ai_messages);
+        aiInput = findViewById(R.id.ai_input);
+        ImageButton settings = findViewById(R.id.btn_ai_settings);
+        ImageButton close = findViewById(R.id.btn_ai_close);
+        ImageButton send = findViewById(R.id.btn_ai_send);
 
-    // --------------------------- DOWNLOAD / PLAY / SNACK ---------------------------
+        // Populate providers
+        List<String> names = new ArrayList<>();
+        List<AiClient.Provider> list = aiClient.getProviders();
+        for (AiClient.Provider p : list) names.add(p.name);
+        ArrayAdapter<String> adapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, names);
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        aiSpinner.setAdapter(adapter);
 
-    private void downloadMedia() {
-        final String pageUrl = core.currentUrl();
-        toast("Scanning page for media…");
-        core.scanForMedia(urls -> {
-            if (urls == null || urls.isEmpty()) { promptManualDownload(pageUrl); return; }
-            pickMedia(urls, "Choose media to download", url -> enqueueDownload(url, pageUrl), pageUrl);
-        });
-    }
-
-    private void playMedia() {
-        final String pageUrl = core.currentUrl();
-        toast("Scanning page for media…");
-        core.scanForMedia(urls -> {
-            if (urls == null || urls.isEmpty()) { promptManualPlay(null); return; }
-            pickMedia(urls, "Choose media to play", this::launchPlayerUrl, null);
-        });
-    }
-
-    private void playSnack() {
-        final String pageUrl = core.currentUrl();
-        toast("Scanning page for media…");
-        core.scanForMedia(urls -> {
-            if (urls == null || urls.isEmpty()) { promptManualSnack(); return; }
-            pickMedia(urls, "Play in snack", url -> {
-                ensureSnack().play(url, hostOf(url));
-                toast("Playing in snack");
-            }, null);
-        });
-    }
-
-    private SnackPlayer ensureSnack() {
-        if (snackPlayer == null) snackPlayer = new SnackPlayer(this, root);
-        return snackPlayer;
-    }
-
-    private String hostOf(String url) {
-        try { return Uri.parse(url).getHost(); } catch (Exception e) { return "Snack player"; }
-    }
-
-    private void pickMedia(List<String> urls, String title, java.util.function.Consumer<String> onPick, String pageUrl) {
-        String[] items = new String[urls.size() + 1];
-        items[0] = "Enter URL manually…";
-        for (int i = 0; i < urls.size(); i++) {
-            com.minibrowser.download.DownloadTask.Type t = com.minibrowser.download.MediaSniffer.classify(urls.get(i));
-            String tag = t != null ? " [" + t.name() + "]" : "";
-            String u = urls.get(i);
-            items[i + 1] = (u.length() > 60 ? u.substring(0, 60) + "..." : u) + tag;
+        // Active selection
+        String activeId = aiClient.getActiveProviderId();
+        for (int i = 0; i < list.size(); i++) {
+            if (list.get(i).id.equals(activeId)) { aiSpinner.setSelection(i); break; }
         }
-        new AlertDialog.Builder(this).setTitle(title).setItems(items, (d, which) -> {
-            if (which == 0) {
-                if (pageUrl != null) promptManualDownload(pageUrl);
-                else if (title != null && title.contains("snack")) promptManualSnack();
-                else promptManualPlay(null);
-            } else {
-                onPick.accept(urls.get(which - 1));
+
+        aiSpinner.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(android.widget.AdapterView<?> p1, View p2, int pos, long p4) {
+                if (!aiSpinnerReady) { aiSpinnerReady = true; return; }
+                String id = aiClient.getProviders().get(pos).id;
+                aiClient.setActiveProvider(id);
+                toast("AI Provider set to " + aiClient.getProviders().get(pos).name);
             }
-        }).setNegativeButton("Cancel", null).show();
+            @Override public void onNothingSelected(android.widget.AdapterView<?> p1) { }
+        });
+
+        settings.setOnClickListener(v -> showAiSettings());
+        close.setOnClickListener(v -> hideAiPanel());
+
+        final Runnable doSend = () -> {
+            String text = aiInput.getText().toString().trim();
+            if (!text.isEmpty()) { aiInput.setText(""); sendMessage(text); }
+        };
+        send.setOnClickListener(v -> doSend.run());
+        aiInput.setOnEditorActionListener((v, actionId, e) -> { if (actionId == EditorInfo.IME_ACTION_SEND) { doSend.run(); return true; } return false; });
     }
 
-    private void promptManualDownload(final String pageUrl) {
-        final EditText et = new EditText(this);
-        et.setHint("https://example.com/stream.m3u8");
-        et.setInputType(InputType.TYPE_TEXT_VARIATION_URI);
-        new AlertDialog.Builder(this).setTitle("Download URL").setView(et)
-                .setPositiveButton("Download", (d, w) -> { String u = et.getText().toString().trim(); if (!u.isEmpty()) enqueueDownload(u, pageUrl); })
-                .setNegativeButton("Cancel", null).show();
+    private void showAiPanel() {
+        aiPanelVisible = true;
+        vm.setAiPanelVisible(true);
+        aiPanel.setVisibility(View.VISIBLE);
+        aiPanel.setTranslationY(aiPanel.getHeight() == 0 ? dp(600) : aiPanel.getHeight());
+        aiPanel.animate().translationY(0f).setDuration(220).start();
+        
+        // Restore messages
+        aiMessages.removeAllViews();
+        for (AiClient.Msg m : vm.getAiHistory()) appendMsg(m.user, m.text);
+        aiScroll.post(() -> aiScroll.fullScroll(View.FOCUS_DOWN));
     }
 
-    private void promptManualPlay(String pageUrl) {
-        final EditText et = new EditText(this);
-        et.setHint("https://example.com/video.mp4");
-        et.setInputType(InputType.TYPE_TEXT_VARIATION_URI);
-        new AlertDialog.Builder(this).setTitle("Play URL").setView(et)
-                .setPositiveButton("Play", (d, w) -> { String u = et.getText().toString().trim(); if (!u.isEmpty()) launchPlayerUrl(u); })
-                .setNegativeButton("Cancel", null).show();
+    private void hideAiPanel() {
+        aiPanelVisible = false;
+        vm.setAiPanelVisible(false);
+        aiPanel.animate().translationY(aiPanel.getHeight()).setDuration(200)
+                .withEndAction(() -> aiPanel.setVisibility(View.GONE)).start();
+        hideKeyboard(aiInput);
     }
 
-    private void promptManualSnack() {
-        final EditText et = new EditText(this);
-        et.setHint("https://example.com/audio.mp3");
-        et.setInputType(InputType.TYPE_TEXT_VARIATION_URI);
-        new AlertDialog.Builder(this).setTitle("Snack URL").setView(et)
-                .setPositiveButton("Play", (d, w) -> { String u = et.getText().toString().trim(); if (!u.isEmpty()) { ensureSnack().play(u, hostOf(u)); toast("Playing in snack"); } })
-                .setNegativeButton("Cancel", null).show();
+    private void sendMessage(String text) {
+        appendMsg(true, text);
+        vm.addAiMessage(true, text);
+        aiScroll.post(() -> aiScroll.fullScroll(View.FOCUS_DOWN));
+
+        aiClient.send(new ArrayList<>(vm.getAiHistory()), new AiClient.Callback() {
+            @Override
+            public void onReply(String reply) {
+                vm.addAiMessage(false, reply);
+                appendMsg(false, reply);
+                aiScroll.post(() -> aiScroll.fullScroll(View.FOCUS_DOWN));
+            }
+            @Override
+            public void onError(String err) {
+                toast(err);
+            }
+        });
     }
 
-    private void enqueueDownload(String url, String pageUrl) {
-        com.minibrowser.download.DownloadManager.get().enqueue(url, pageUrl, null);
-        toast("Download queued");
-        Intent i = new Intent(this, com.minibrowser.download.DownloadActivity.class);
-        i.putExtra("url", url);
-        i.putExtra("pageUrl", pageUrl);
-        startActivity(i);
+    private void appendMsg(boolean user, String text) {
+        TextView tv = new TextView(this);
+        tv.setText(text);
+        tv.setTextSize(14);
+        tv.setPadding((int) dp(12), (int) dp(10), (int) dp(12), (int) dp(10));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = (int) dp(8);
+        lp.bottomMargin = (int) dp(8);
+
+        android.graphics.drawable.GradientDrawable gd = new android.graphics.drawable.GradientDrawable();
+        gd.setCornerRadius(dp(12));
+        if (user) {
+            lp.gravity = Gravity.END;
+            lp.leftMargin = (int) dp(60);
+            tv.setTextColor(0xFFFFFFFF);
+            gd.setColor(getColor(R.color.accent));
+        } else {
+            lp.gravity = Gravity.START;
+            lp.rightMargin = (int) dp(60);
+            tv.setTextColor(getColor(R.color.text_primary));
+            gd.setColor(getColor(R.color.surface_elevated));
+        }
+        tv.setBackground(gd);
+        tv.setLayoutParams(lp);
+        aiMessages.addView(tv);
     }
 
-    private void launchPlayerUrl(String url) {
-        Intent i = new Intent(this, com.minibrowser.media.MediaPlayerActivity.class);
-        i.setDataAndType(Uri.parse(url), null);
-        startActivity(i);
+    private void showAiSettings() {
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        int pad = (int) dp(16);
+        layout.setPadding(pad, pad, pad, pad);
+
+        TextView provT = new TextView(this);
+        provT.setText("AI Provider settings: " + aiClient.getActiveProvider().name);
+        provT.setTextSize(16);
+        provT.setTextColor(getColor(R.color.text_primary));
+        layout.addView(provT);
+
+        final EditText ep = new EditText(this);
+        ep.setHint("API Endpoint URL");
+        ep.setText(aiClient.getEndpoint());
+        ep.setSingleLine(true);
+        ep.setPadding((int) dp(8), (int) dp(12), (int) dp(8), (int) dp(12));
+        layout.addView(ep);
+
+        final EditText model = new EditText(this);
+        model.setHint("Model (e.g. gpt-4o-mini)");
+        model.setText(aiClient.getModel());
+        model.setSingleLine(true);
+        model.setPadding((int) dp(8), (int) dp(12), (int) dp(8), (int) dp(12));
+        layout.addView(model);
+
+        final EditText key = new EditText(this);
+        key.setHint("API Key (Stored in secure Keystore)");
+        key.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        key.setText(aiClient.getKey());
+        key.setSingleLine(true);
+        key.setPadding((int) dp(8), (int) dp(12), (int) dp(8), (int) dp(12));
+        layout.addView(key);
+
+        AlertDialog dlg = new AlertDialog.Builder(this)
+                .setTitle("AI API Configuration")
+                .setView(layout)
+                .setPositiveButton("Save", (d, w) -> {
+                    aiClient.setEndpoint(ep.getText().toString());
+                    aiClient.setModel(model.getText().toString());
+                    aiClient.setKey(key.getText().toString());
+                    toast("AI configuration saved");
+                })
+                .setNegativeButton("Cancel", null)
+                .setNeutralButton("Delete Custom", null)
+                .create();
+
+        dlg.show();
+
+        dlg.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(b -> {
+            String activeId = aiClient.getActiveProviderId();
+            if (activeId.startsWith("custom_")) {
+                new AlertDialog.Builder(this)
+                        .setTitle("Delete custom provider?")
+                        .setMessage(aiClient.getActiveProvider().name)
+                        .setPositiveButton("Delete", (d2, w2) -> {
+                            aiClient.removeCustomProvider(activeId);
+                            toast("Provider deleted");
+                            dlg.dismiss();
+                            buildAiPanel(); // rebuild panel spinner
+                        })
+                        .setNegativeButton("Cancel", null)
+                        .show();
+            } else {
+                toast("Built-in providers cannot be deleted");
+            }
+        });
     }
 
-    // --------------------------- BOOKMARKS ---------------------------
-
-    private void toggleBookmark() {
-        String url = core.currentUrl();
-        if (url == null || url.startsWith("about:")) { toast("Open a page first"); return; }
-        String title = (currentTitle != null && !currentTitle.isEmpty()) ? currentTitle : url;
-        if (bookmarks.contains(url)) { bookmarks.remove(url); toast("Bookmark removed"); }
-        else { bookmarks.add(title, url); toast("Bookmarked"); }
-        updateBookmarkIcon(url);
-    }
-
-    private void updateBookmarkIcon(String url) {
-        boolean on = url != null && !url.startsWith("about:") && bookmarks.contains(url);
-        btnBookmark.setImageResource(on ? R.drawable.ic_bookmark_filled : R.drawable.ic_bookmark_outline);
-        btnBookmark.setAlpha(on ? 1f : 0.7f);
-    }
+    // --------------------------- BOOKMARKS DIALOG ---------------------------
 
     private void showBookmarks() {
-        final List<Bookmarks.Entry> list = bookmarks.snapshot();
-        if (list.isEmpty()) { toast("No bookmarks yet"); return; }
         ScrollView sv = new ScrollView(this);
         final LinearLayout rootL = new LinearLayout(this);
         rootL.setOrientation(LinearLayout.VERTICAL);
+        int pad = (int) dp(16);
+        rootL.setPadding(pad, pad, pad, pad);
+
+        List<Bookmarks.Entry> list = bookmarks.snapshot();
+        if (list.isEmpty()) { toast("No bookmarks saved"); return; }
+
         for (Bookmarks.Entry e : list) {
             final String url = e.url;
-            final LinearLayout item = new LinearLayout(this);
+            LinearLayout item = new LinearLayout(this);
             item.setOrientation(LinearLayout.VERTICAL);
+            item.setPadding(0, (int) dp(6), 0, (int) dp(6));
+
             LinearLayout row = new LinearLayout(this);
             row.setOrientation(LinearLayout.HORIZONTAL);
             row.setGravity(Gravity.CENTER_VERTICAL);
-            row.setPadding((int) dp(4), (int) dp(8), (int) dp(4), (int) dp(8));
+
             TextView tv = new TextView(this);
-            String label = (e.title != null && !e.title.isEmpty()) ? e.title : url;
-            tv.setText(label);
+            tv.setText(e.title + "\n" + url);
             tv.setTextColor(getColor(R.color.text_primary));
-            tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
-            tv.setSingleLine(true);
+            tv.setTextSize(14);
             tv.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+            tv.setClickable(true);
             tv.setBackgroundResource(getSelectableBackground());
             tv.setOnClickListener(v -> { core.loadUrl(url); hideSheet(); });
+
             ImageButton del = new ImageButton(this);
             del.setImageResource(R.drawable.ic_close);
             del.setBackground(null);
@@ -1216,6 +1828,8 @@ public class MainActivity extends AppCompatActivity implements BrowserCore.Callb
         new AlertDialog.Builder(this).setTitle("Bookmarks").setView(sv).setNegativeButton("Close", null).show();
     }
 
+    // --------------------------- PERMISSIONS & SYS CALLBACKS ---------------------------
+
     @Override
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
@@ -1228,8 +1842,21 @@ public class MainActivity extends AppCompatActivity implements BrowserCore.Callb
         if (requestCode == REQ_FILE) core.onFileChooserResult(resultCode, data);
     }
 
+    // ============================ BROWSER CORE CALLBACKS ============================
+
     @Override
-    public void onUrlChanged(String url) {
+    public void onUrlChanged(BrowserCore sender, String url) {
+        Tab tab = findTabForCore(sender);
+        if (tab != null) {
+            tab.url = url;
+            if (url != null && !url.startsWith("about:")) {
+                tab.isHome = false;
+            }
+        }
+        
+        // Only update screen UI if the callback comes from the active tab's core
+        if (sender != core) return;
+
         updateBookmarkIcon(url);
         if (url == null || url.startsWith("about:")) return;
         isHome = false;
@@ -1240,14 +1867,66 @@ public class MainActivity extends AppCompatActivity implements BrowserCore.Callb
         updateNavButtons();
     }
 
-    @Override public void onProgress(int p) {
+    @Override 
+    public void onProgress(BrowserCore sender, int p) {
+        // Only update screen UI if the callback comes from the active tab's core
+        if (sender != core) return;
+
         if (p >= 100) progress.setVisibility(View.GONE);
         else { progress.setVisibility(View.VISIBLE); progress.setProgress(p); }
     }
-    @Override public void onPageFinished(String url) { progress.setVisibility(View.GONE); updateNavButtons(); updateBookmarkIcon(url); }
-    @Override public void onTitleChanged(String title) { currentTitle = title == null ? "" : title; }
-    @Override public void onHome() { isHome = true; vm.setHome(true); homeOverlay.setVisibility(View.VISIBLE); }
-    @Override public void showToast(String msg) { toast(msg); }
+
+    @Override 
+    public void onPageFinished(BrowserCore sender, String url) {
+        Tab tab = findTabForCore(sender);
+        if (tab != null) {
+            tab.url = url;
+        }
+
+        // Only update screen UI if the callback comes from the active tab's core
+        if (sender != core) return;
+
+        progress.setVisibility(View.GONE); 
+        updateNavButtons(); 
+        updateBookmarkIcon(url); 
+    }
+
+    @Override 
+    public void onTitleChanged(BrowserCore sender, String title) {
+        Tab tab = findTabForCore(sender);
+        if (tab != null) {
+            tab.title = title == null ? "New Tab" : title;
+        }
+
+        // Only update screen UI if the callback comes from the active tab's core
+        if (sender != core) return;
+
+        currentTitle = title == null ? "" : title; 
+    }
+
+    @Override 
+    public void onHome(BrowserCore sender) {
+        Tab tab = findTabForCore(sender);
+        if (tab != null) {
+            tab.isHome = true;
+            tab.url = "";
+            tab.title = "New Tab";
+        }
+
+        // Only update screen UI if the callback comes from the active tab's core
+        if (sender != core) return;
+
+        isHome = true; 
+        vm.setHome(true); 
+        homeOverlay.setVisibility(View.VISIBLE); 
+    }
+
+    @Override 
+    public void showToast(String msg) { 
+        toast(msg); 
+    }
+
+    // ============================ UI UTILITIES ============================
 
     private void updateNavButtons() {
         btnBack.setAlpha(core.canGoBack() ? 1f : 0.35f);
@@ -1263,4 +1942,30 @@ public class MainActivity extends AppCompatActivity implements BrowserCore.Callb
         if (imm != null) imm.hideSoftInputFromWindow(v.getWindowToken(), 0);
     }
     private float dp(int v) { return TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v, getResources().getDisplayMetrics()); }
+    
+    // Auxiliary fullscreen control
+    private void hideChrome() {
+        WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
+        WindowInsetsControllerCompat ctrl = WindowCompat.getInsetsController(getWindow(), getWindow().getDecorView());
+        if (ctrl != null) {
+            ctrl.hide(WindowInsetsCompat.Type.systemBars());
+            ctrl.setSystemBarsBehavior(WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+        }
+        toolbar.setVisibility(View.GONE);
+    }
+
+    private void showChrome() {
+        WindowCompat.setDecorFitsSystemWindows(getWindow(), true);
+        WindowInsetsControllerCompat ctrl = WindowCompat.getInsetsController(getWindow(), getWindow().getDecorView());
+        if (ctrl != null) {
+            ctrl.show(WindowInsetsCompat.Type.systemBars());
+        }
+        toolbar.setVisibility(View.VISIBLE);
+    }
+
+    private void setFullscreen(boolean on) {
+        fullscreen = on;
+        vm.setFullscreen(on);
+        if (on) hideChrome(); else showChrome();
+    }
 }

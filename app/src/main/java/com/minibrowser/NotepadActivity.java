@@ -18,7 +18,7 @@ import java.nio.charset.StandardCharsets;
 /**
  * A plain-text scratchpad. The content lives in <filesDir>/notepad.txt and is
  *
- *  - loaded synchronously in onCreate() (a single, small file — fast enough),
+ *  - loaded asynchronously in onCreate() to prevent blocking the UI thread,
  *  - flushed to disk on a *background* thread in onPause() so the UI is never
  *    blocked by I/O. Writes are atomic: we stage to notepad.tmp then rename.
  */
@@ -63,25 +63,31 @@ public class NotepadActivity extends Activity {
     }
 
     private void loadText() {
-        if (!target.exists()) {
-            return;
-        }
-        StringBuilder sb = new StringBuilder();
-        try (BufferedReader r = new BufferedReader(
-                new InputStreamReader(new FileInputStream(target), StandardCharsets.UTF_8))) {
-            String line;
-            while ((line = r.readLine()) != null) {
-                sb.append(line).append('\n');
+        new Thread(() -> {
+            if (!target.exists()) {
+                return;
             }
-            // Trim the trailing newline added by the read loop if present.
-            if (sb.length() > 0 && sb.charAt(sb.length() - 1) == '\n') {
-                sb.deleteCharAt(sb.length() - 1);
+            final StringBuilder sb = new StringBuilder();
+            try (BufferedReader r = new BufferedReader(
+                    new InputStreamReader(new FileInputStream(target), StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = r.readLine()) != null) {
+                    sb.append(line).append('\n');
+                }
+                // Trim the trailing newline added by the read loop if present.
+                if (sb.length() > 0 && sb.charAt(sb.length() - 1) == '\n') {
+                    sb.deleteCharAt(sb.length() - 1);
+                }
+            } catch (IOException e) {
+                // Best effort — an empty editor is fine.
             }
-        } catch (IOException e) {
-            // Best effort — an empty editor is fine.
-        }
-        editor.setText(sb.toString());
-        editor.setSelection(editor.getText().length());
+            
+            // Post results back to the main UI thread
+            runOnUiThread(() -> {
+                editor.setText(sb.toString());
+                editor.setSelection(editor.getText().length());
+            });
+        }, "NotepadLoader").start();
     }
 
     @Override

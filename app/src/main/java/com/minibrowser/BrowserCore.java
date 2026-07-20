@@ -28,6 +28,11 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 
+import androidx.webkit.ProxyConfig;
+import androidx.webkit.ProxyController;
+import androidx.webkit.WebSettingsCompat;
+import androidx.webkit.WebViewFeature;
+
 import org.json.JSONTokener;
 
 import java.io.BufferedReader;
@@ -59,6 +64,9 @@ import java.util.concurrent.ConcurrentHashMap;
  *   • Click-to-Block bridge
  *   • Offline page capture
  *   • Compatibility-mode toggle
+ *   • Jetpack Webkit integrations (Force native Darkening)
+ *   • Custom styled private error page
+ *   • Custom SOCKS5/HTTP Proxy Overrides (Tor/censorship bypass)
  *
  * The Activity is referenced only through a {@link Callback}; the JS bridge uses a
  * static class + WeakReference to guarantee no context leaks.
@@ -74,6 +82,7 @@ public class BrowserCore {
     private static final String KEY_COMPAT = "compat_mode";
     private static final String KEY_CELLGUARD = "cell_guard";
     private static final String KEY_SAFEBROWSING = "safe_browsing";
+    private static final String KEY_ADBLOCK = "adblock_enabled";
     private static final String DEFAULT_SEARCH = "https://duckduckgo.com/?q=%s";
 
     // ---- User-agent mode (desktop / mobile) ----
@@ -115,6 +124,10 @@ public class BrowserCore {
     private volatile boolean onCellular = false;
     private volatile boolean cellGuard = true;
     private volatile boolean blockMode = false;     // click-to-block armed
+    private volatile boolean adBlockEnabled = true;
+
+    // ---- Secure Token for JS Interfaces (against cross-site attacks) ----
+    private final String secureToken = Long.toHexString(new java.security.SecureRandom().nextLong());
 
     // ---- Networking ----
     private final ConnectivityManager connectivity;
@@ -160,9 +173,9 @@ public class BrowserCore {
         configureSettings();
         webView.setWebViewClient(new CoreWebViewClient());
         webView.setWebChromeClient(new CoreChromeClient());
-        // Static bridge -> no inner-class leak of the Activity.
-        webView.addJavascriptInterface(new BlockBridge(owner), "AndroidBlock");
-        webView.addJavascriptInterface(new NavBridge(owner), "__mbNav");
+        // Static bridge -> no inner-class leak of the Activity. Exposes secure token
+        webView.addJavascriptInterface(new BlockBridge(owner, secureToken), "AndroidBlock");
+        webView.addJavascriptInterface(new NavBridge(owner, secureToken), "__mbNav");
 
         // Restore prefs for runtime toggles.
         final boolean compat = owner.getPreferences(Context.MODE_PRIVATE)
@@ -171,8 +184,11 @@ public class BrowserCore {
                 .getBoolean(KEY_CELLGUARD, true);
         final boolean safe = owner.getPreferences(Context.MODE_PRIVATE)
                 .getBoolean(KEY_SAFEBROWSING, true);
+        final boolean adblock = owner.getPreferences(Context.MODE_PRIVATE)
+                .getBoolean(KEY_ADBLOCK, true);
         setCellGuard(guard);
         setSafeBrowsing(safe);
+        setAdBlockEnabled(adblock);
         setCompatibilityMode(compat); // applies mixed-content + 3rd-party cookie policy
 
         // Restore UA mode (desktop by default, matching the spoof spec).
@@ -193,7 +209,9 @@ public class BrowserCore {
                     (changed, total, msg) -> {
                         Log.i(TAG, "Blocklist: " + msg + " (total " + total + ")");
                         if (changed) {
-                            callback.showToast("Blocklist updated: " + total + " domains");
+                            if (callback != null) {
+                                callback.showToast("Blocklist updated: " + total + " domains");
+                            }
                         }
                     });
         }, "BlocklistInit").start();
@@ -204,6 +222,9 @@ public class BrowserCore {
         translateTarget = owner.getPreferences(Context.MODE_PRIVATE)
                 .getString(KEY_TRANSLATE_LANG, DEFAULT_LANG);
         applyHeavyMode();
+        
+        // Cold startup: apply proxy configurations
+        applyProxySettings();
     }
 
     private void configureSettings() {
@@ -222,6 +243,11 @@ public class BrowserCore {
         s.setUseWideViewPort(true);
         s.setTextZoom(100);
         s.setMediaPlaybackRequiresUserGesture(true);
+
+        // --- Algorithmic Darkening (Jetpack Webkit force dark-mode for pages) ---
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.ALGORITHMIC_DARKENING)) {
+            WebSettingsCompat.setAlgorithmicDarkeningAllowed(s, true);
+        }
 
         // --- Sandboxing (NON-NEGOTIABLE) ---
         // Base file access is ENABLED so that offline pages can be loaded via
@@ -364,12 +390,15 @@ public class BrowserCore {
         final Uri uri = request.getUrl();
         if (uri == null) return null;
 
-        // Blocklist — exact host plus suffix match (covers sub-domains).
-        final String host = uri.getHost();
-        if (host != null) {
-            final String h = host.toLowerCase();
-            if (blockedDomains.contains(h) || isSuffixBlocked(h)) {
-                return EMPTY_RESPONSE;
+        // Content-Blocking Toggle (Shields Shielding)
+        if (adBlockEnabled) {
+            // Blocklist — exact host plus suffix match (covers sub-domains).
+            final String host = uri.getHost();
+            if (host != null) {
+                final String h = host.toLowerCase();
+                if (blockedDomains.contains(h) || isSuffixBlocked(h)) {
+                    return EMPTY_RESPONSE;
+                }
             }
         }
 
@@ -418,6 +447,7 @@ public class BrowserCore {
         final String vendor = "Google Inc.";
         final String appVersion = ua.startsWith("Mozilla/") ? ua.substring(8) : ua;
         return "(function(){try{"
+                + "window.__mbToken = '" + secureToken + "';"
                 + "var UA=" + jsString(ua) + ";"
                 + "function rd(o,p,v){try{Object.defineProperty(o,p,{get:function(){return v;},configurable:true});}catch(e){}}"
                 + "rd(navigator,'userAgent',UA);"
@@ -439,7 +469,7 @@ public class BrowserCore {
                 + "}catch(e){}})();";
     }
 
-    /** Injected when Click-to-Block is armed. */
+    /** Injected when Click-to-Block is armed. Supports tokenized authorization. */
     private static final String BLOCK_PICKER_JS =
         "(function(){"
         + "if(window.__mbPicker)return;window.__mbPicker=true;"
@@ -463,7 +493,7 @@ public class BrowserCore {
         + "  e.preventDefault();e.stopPropagation();e.stopImmediatePropagation();"
         + "  var t=e.target;if(!t||t.nodeType!==1)return;"
         + "  t.style.outline='2px solid #ff3b30';t.style.outlineOffset='-2px';"
-        + "  try{AndroidBlock.onElementSelected(sel(t));}catch(err){}"
+        + "  try{AndroidBlock.onElementSelected(sel(t), window.__mbToken || '');}catch(err){}"
         + "}"
         + "document.addEventListener('click',onClick,true);"
         + "})();";
@@ -514,7 +544,7 @@ public class BrowserCore {
         if (url == null) return;
         if (HOME.equals(url)) {
             webView.loadUrl("about:blank");
-            if (callback != null) callback.onHome();
+            if (callback != null) callback.onHome(BrowserCore.this);
             return;
         }
         webView.loadUrl(url);
@@ -550,6 +580,7 @@ public class BrowserCore {
     }
 
     static boolean looksLikeUrl(String s) {
+        if (s == null || s.trim().isEmpty()) return false;
         if (s.indexOf(' ') >= 0 || s.indexOf('\t') >= 0) return false;
         if ("localhost".equals(s)) return true;
         int dot = s.lastIndexOf('.');
@@ -599,6 +630,14 @@ public class BrowserCore {
 
     public boolean isCellGuard() { return cellGuard; }
 
+    public void setAdBlockEnabled(boolean enabled) {
+        adBlockEnabled = enabled;
+        activity.getPreferences(Context.MODE_PRIVATE).edit()
+                .putBoolean(KEY_ADBLOCK, enabled).apply();
+    }
+
+    public boolean isAdBlockEnabled() { return adBlockEnabled; }
+
     // ----------------------- User-agent mode -----------------------
 
     public boolean isDesktopMode() { return desktopMode; }
@@ -616,7 +655,7 @@ public class BrowserCore {
     public void setSurfingKeys(boolean on) {
         surfingKeys = on;
         activity.getPreferences(Context.MODE_PRIVATE).edit().putBoolean("surfingkeys", on).apply();
-        if (on) webView.evaluateJavascript(com.minibrowser.media.SurfingKeys.script(), null);
+        if (on) webView.evaluateJavascript(com.minibrowser.media.SurfingKeys.script(secureToken), null);
     }
 
     // ----------------------- Auto translation -----------------------
@@ -649,7 +688,7 @@ public class BrowserCore {
     public void translateCurrent() {
         String url = webView.getUrl();
         if (url == null || !url.startsWith("http")) {
-            callback.showToast("Open a web page first");
+            if (callback != null) callback.showToast("Open a web page first");
             return;
         }
         translatePage(url, translateTarget);
@@ -711,9 +750,10 @@ public class BrowserCore {
 
     public void refreshBlocklist() {
         if (blocklistUpdater == null) return;
-        callback.showToast("Updating blocklist…");
-        blocklistUpdater.refresh(true, (changed, total, msg) ->
-                callback.showToast(msg + " · " + total + " domains"));
+        if (callback != null) callback.showToast("Updating blocklist…");
+        blocklistUpdater.refresh(true, (changed, total, msg) -> {
+            if (callback != null) callback.showToast(msg + " · " + total + " domains");
+        });
     }
 
     public int getBlockedDomainCount() { return blockedDomains.size(); }
@@ -807,7 +847,7 @@ public class BrowserCore {
                 "(function(){try{return document.documentElement.outerHTML;}catch(e){return null;}})();",
                 value -> {
                     if (value == null || "null".equals(value)) {
-                        callback.showToast("Nothing to save");
+                        if (callback != null) callback.showToast("Nothing to save");
                         return;
                     }
                     String html;
@@ -827,10 +867,14 @@ public class BrowserCore {
                         if (!dir.exists()) dir.mkdirs();
                         try (FileOutputStream fos = new FileOutputStream(new File(dir, name))) {
                             fos.write(content.getBytes(StandardCharsets.UTF_8));
-                            main.post(() -> callback.showToast("Saved offline"));
+                            if (callback != null) {
+                                main.post(() -> callback.showToast("Saved offline"));
+                            }
                         } catch (IOException e) {
                             Log.e(TAG, "saveOffline", e);
-                            main.post(() -> callback.showToast("Save failed"));
+                            if (callback != null) {
+                                main.post(() -> callback.showToast("Save failed"));
+                            }
                         }
                     }, "OfflineSaver").start();
                 });
@@ -956,6 +1000,45 @@ public class BrowserCore {
     }
 
     // ============================================================= //
+    // ===================== PROXY OVERRIDES ====================== //
+    // ============================================================= //
+
+    public void applyProxySettings() {
+        if (!WebViewFeature.isFeatureSupported(WebViewFeature.PROXY_OVERRIDE)) {
+            Log.w(TAG, "ProxyOverride not supported on this device's WebView version");
+            return;
+        }
+
+        boolean enabled = activity.getPreferences(Context.MODE_PRIVATE).getBoolean("proxy_enabled", false);
+        if (!enabled) {
+            ProxyController.getInstance().clearProxyOverride(
+                    () -> Log.i(TAG, "Proxy Override cleared successfully"),
+                    new Handler(Looper.getMainLooper())::post
+            );
+            return;
+        }
+
+        String host = activity.getPreferences(Context.MODE_PRIVATE).getString("proxy_host", "127.0.0.1");
+        int port = activity.getPreferences(Context.MODE_PRIVATE).getInt("proxy_port", 9050); // Tor default SOCKS
+        String type = activity.getPreferences(Context.MODE_PRIVATE).getString("proxy_type", "socks");
+
+        String proxyUrl = type + "://" + host + ":" + port;
+        ProxyConfig proxyConfig = new ProxyConfig.Builder()
+                .addProxyRule(proxyUrl)
+                .addDirect() // bypass proxy for local addresses
+                .build();
+
+        try {
+            ProxyController.getInstance().setProxyOverride(proxyConfig, Runnable::run, () -> {
+                Log.i(TAG, "Proxy Override set successfully to: " + proxyUrl);
+                main.post(() -> callback.showToast("Tor/Proxy Route Enabled: " + proxyUrl));
+            });
+        } catch (Exception e) {
+            Log.e(TAG, "setProxyOverride failed", e);
+        }
+    }
+
+    // ============================================================= //
     // ========================== TEARDOWN ======================== //
     // ============================================================= //
 
@@ -997,13 +1080,16 @@ public class BrowserCore {
      */
     private static final class BlockBridge {
         private final WeakReference<MainActivity> ref;
+        private final String token;
 
-        BlockBridge(MainActivity owner) {
+        BlockBridge(MainActivity owner, String token) {
             this.ref = new WeakReference<>(owner);
+            this.token = token;
         }
 
         @android.webkit.JavascriptInterface
-        public void onElementSelected(final String selector) {
+        public void onElementSelected(final String selector, String t) {
+            if (token == null || !token.equals(t)) return;
             final MainActivity a = ref.get();
             if (a == null || selector == null) return;
             a.runOnUiThread(() -> a.onElementPicked(selector));
@@ -1012,13 +1098,16 @@ public class BrowserCore {
 
     private static final class NavBridge {
         private final WeakReference<MainActivity> ref;
+        private final String token;
 
-        NavBridge(MainActivity owner) {
+        NavBridge(MainActivity owner, String token) {
             this.ref = new WeakReference<>(owner);
+            this.token = token;
         }
 
         @android.webkit.JavascriptInterface
-        public void action(String a) {
+        public void action(String a, String t) {
+            if (token == null || !token.equals(t)) return;
             final MainActivity act = ref.get();
             if (act == null || a == null) return;
             act.runOnUiThread(() -> {
@@ -1045,18 +1134,18 @@ public class BrowserCore {
             super.onPageStarted(view, url, favicon);
             // Spoof fingerprints BEFORE the page's own scripts run.
             view.evaluateJavascript(buildFingerprintJs(), null);
-            if (callback != null) callback.onUrlChanged(url);
+            if (callback != null) callback.onUrlChanged(BrowserCore.this, url);
         }
 
         @Override
         public void onPageFinished(WebView view, String url) {
             super.onPageFinished(view, url);
             injectCustomAssets(view);
-            if (surfingKeys) view.evaluateJavascript(com.minibrowser.media.SurfingKeys.script(), null);
+            if (surfingKeys) view.evaluateJavascript(com.minibrowser.media.SurfingKeys.script(secureToken), null);
             if (blockMode) view.evaluateJavascript(BLOCK_PICKER_JS, null);
             maybeAutoTranslate(view, url);
             CookieManager.getInstance().flush();
-            if (callback != null) callback.onPageFinished(url);
+            if (callback != null) callback.onPageFinished(BrowserCore.this, url);
         }
 
         @Override
@@ -1082,7 +1171,7 @@ public class BrowserCore {
                 i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                 activity.startActivity(i);
             } catch (Exception e) {
-                callback.showToast("No app to open " + scheme);
+                if (callback != null) callback.showToast("No app to open " + scheme);
             }
             return true;
         }
@@ -1099,8 +1188,49 @@ public class BrowserCore {
             // Never "proceed"; bounce the user back to safety.
             if (Build.VERSION.SDK_INT >= 26) {
                 response.backToSafety(true);
-                callback.showToast("Dangerous site blocked");
+                if (callback != null) callback.showToast("Dangerous site blocked");
             }
+        }
+
+        // ============================ CUSTOM BRANDED NATIVE ERROR PAGE ============================
+
+        @Override
+        public void onReceivedError(WebView view, WebResourceRequest request, android.webkit.WebResourceError error) {
+            // Only show custom branded screen for main page failures (not broken resources)
+            if (request.isForMainFrame()) {
+                showCustomErrorPage(view, request.getUrl().toString(), error.getDescription().toString());
+            }
+        }
+
+        @SuppressWarnings("deprecation")
+        @Override
+        public void onReceivedError(WebView view, int errorCode, String description, String failingUrl) {
+            showCustomErrorPage(view, failingUrl, description);
+        }
+
+        private void showCustomErrorPage(WebView view, String failingUrl, String description) {
+            String errorHtml = "<!DOCTYPE html><html><head><meta charset='utf-8'>"
+                    + "<meta name='viewport' content='width=device-width, initial-scale=1.0'>"
+                    + "<style>"
+                    + "body { background-color: #0E1116; color: #ECEFF4; font-family: -apple-system, sans-serif; text-align: center; padding: 48px 24px; margin: 0; }"
+                    + ".container { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; max-width: 400px; margin: 0 auto; box-sizing: border-box; }"
+                    + ".icon { font-size: 72px; margin-bottom: 24px; animation: pulse 2s infinite ease-in-out; }"
+                    + "h1 { font-size: 24px; font-weight: bold; margin: 0 0 12px 0; color: #FF4D4F; letter-spacing: -0.5px; }"
+                    + ".url { font-family: monospace; font-size: 13px; color: #4F8CFF; word-break: break-all; background-color: #181C24; padding: 6px 12px; border-radius: 8px; border: 1px solid #2A2F3A; margin-bottom: 16px; }"
+                    + "p { font-size: 14px; color: #8B93A5; line-height: 1.6; margin: 0 0 32px 0; }"
+                    + ".btn { background-color: #4F8CFF; color: #0E1116; font-weight: bold; border: none; padding: 14px 28px; border-radius: 12px; font-size: 15px; text-decoration: none; cursor: pointer; transition: background-color 0.15s ease; box-shadow: 0 4px 12px rgba(79, 140, 255, 0.2); }"
+                    + ".btn:active { background-color: #3A6FD6; }"
+                    + "@keyframes pulse { 0% { transform: scale(1); } 50% { transform: scale(1.05); } 100% { transform: scale(1); } }"
+                    + "</style></head><body>"
+                    + "<div class='container'>"
+                    + "  <div class='icon'>📡</div>"
+                    + "  <h1>Connection Failed</h1>"
+                    + "  <div class='url'>" + failingUrl + "</div>"
+                    + "  <p>MiniBrowser could not establish a connection. " + description + ".</p>"
+                    + "  <button class='btn' onclick='location.reload()'>Try Again</button>"
+                    + "</div>"
+                    + "</body></html>";
+            view.loadDataWithBaseURL(failingUrl, errorHtml, "text/html", "UTF-8", null);
         }
     }
 
@@ -1112,12 +1242,12 @@ public class BrowserCore {
 
         @Override
         public void onProgressChanged(WebView view, int newProgress) {
-            if (callback != null) callback.onProgress(newProgress);
+            if (callback != null) callback.onProgress(BrowserCore.this, newProgress);
         }
 
         @Override
         public void onReceivedTitle(WebView view, String title) {
-            if (callback != null) callback.onTitleChanged(title);
+            if (callback != null) callback.onTitleChanged(BrowserCore.this, title);
         }
 
         @Override
@@ -1155,11 +1285,11 @@ public class BrowserCore {
     // ============================================================= //
 
     public interface Callback {
-        void onUrlChanged(String url);
-        void onProgress(int progress);
-        void onPageFinished(String url);
-        void onTitleChanged(String title);
-        void onHome();
+        void onUrlChanged(BrowserCore sender, String url);
+        void onProgress(BrowserCore sender, int progress);
+        void onPageFinished(BrowserCore sender, String url);
+        void onTitleChanged(BrowserCore sender, String title);
+        void onHome(BrowserCore sender);
         void showToast(String msg);
     }
 

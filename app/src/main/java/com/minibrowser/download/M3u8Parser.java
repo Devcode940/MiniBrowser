@@ -155,8 +155,17 @@ final class M3u8Parser {
         int i = line.toUpperCase().indexOf(key.toUpperCase());
         if (i < 0) return null;
         int start = i + key.length();
-        int comma = line.indexOf(',', start);
-        int end = comma < 0 ? line.length() : comma;
+        boolean inQuotes = false;
+        int end = start;
+        while (end < line.length()) {
+            char c = line.charAt(end);
+            if (c == '"') {
+                inQuotes = !inQuotes;
+            } else if (c == ',' && !inQuotes) {
+                break;
+            }
+            end++;
+        }
         return line.substring(start, end).trim();
     }
 

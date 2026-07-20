@@ -4,7 +4,7 @@ public final class SurfingKeys {
 
     private SurfingKeys() { }
 
-    public static String script() {
+    public static String script(String token) {
         return "(function(){"
             + "if(window.__mbSk)return;window.__mbSk=true;"
             + "var MODE='normal';"
@@ -39,7 +39,7 @@ public final class SurfingKeys {
             + "function fire(el){try{el.click();}catch(e){try{el.dispatchEvent(new MouseEvent('click',{bubbles:true}));}catch(e2){}}}"
             + "function sc(x,y){window.scrollBy({left:x,top:y,behavior:'auto'});}"
             + "function findInPage(){var q=prompt('Find:');if(q){if(window.find){window.find(q,false,false,true,false,true,true);}else if(!document.execCommand('HiliteColor',false,'transparent')){}}}"
-            + "function nav(a){try{__mbNav.action(a);}catch(e){}}"
+            + "function nav(a){try{__mbNav.action(a,'" + token + "');}catch(e){}}"
             + "function press(k){"
             + "  if(MODE==='hint'){if(k==='Escape'){hideHints();}else if(k.length===1){tryHint(k.toLowerCase());}return true;}"
             + "  if(typing())return false;"
