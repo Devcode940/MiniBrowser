@@ -67,6 +67,7 @@ import java.util.concurrent.ConcurrentHashMap;
  *   • Jetpack Webkit integrations (Force native Darkening)
  *   • Custom styled private error page
  *   • Custom SOCKS5/HTTP Proxy Overrides (Tor/censorship bypass)
+ *   • Enclave-Secured Native Autofill & Password Management Bridges
  *
  * The Activity is referenced only through a {@link Callback}; the JS bridge uses a
  * static class + WeakReference to guarantee no context leaks.
@@ -176,6 +177,9 @@ public class BrowserCore {
         // Static bridge -> no inner-class leak of the Activity. Exposes secure token
         webView.addJavascriptInterface(new BlockBridge(owner, secureToken), "AndroidBlock");
         webView.addJavascriptInterface(new NavBridge(owner, secureToken), "__mbNav");
+        
+        // Enclave password autofill bridge
+        webView.addJavascriptInterface(new com.minibrowser.security.AutofillBridge(owner, secureToken), "AndroidAutofill");
 
         // Restore prefs for runtime toggles.
         final boolean compat = owner.getPreferences(Context.MODE_PRIVATE)
@@ -514,7 +518,7 @@ public class BrowserCore {
     }
 
     /** Quote a string for safe embedding inside a JS single-quoted literal. */
-    static String jsString(String s) {
+    public static String jsString(String s) {
         StringBuilder sb = new StringBuilder(s.length() + 8);
         sb.append('\'');
         for (int i = 0; i < s.length(); i++) {
@@ -579,7 +583,7 @@ public class BrowserCore {
         loadUrl(engine.replace("%s", enc));
     }
 
-    static boolean looksLikeUrl(String s) {
+    public static boolean looksLikeUrl(String s) {
         if (s == null || s.trim().isEmpty()) return false;
         if (s.indexOf(' ') >= 0 || s.indexOf('\t') >= 0) return false;
         if ("localhost".equals(s)) return true;
@@ -1055,6 +1059,7 @@ public class BrowserCore {
             webView.stopLoading();
             try { webView.removeJavascriptInterface("AndroidBlock"); } catch (Exception ignored) { }
             try { webView.removeJavascriptInterface("__mbNav"); } catch (Exception ignored) { }
+            try { webView.removeJavascriptInterface("AndroidAutofill"); } catch (Exception ignored) { }
             webView.setWebViewClient(null);
             webView.setWebChromeClient(null);
             webView.loadUrl("about:blank");
@@ -1144,6 +1149,10 @@ public class BrowserCore {
             if (surfingKeys) view.evaluateJavascript(com.minibrowser.media.SurfingKeys.script(secureToken), null);
             if (blockMode) view.evaluateJavascript(BLOCK_PICKER_JS, null);
             maybeAutoTranslate(view, url);
+            
+            // Inject Enclave Autofill scripts
+            injectAutofillScript(view, url);
+            
             CookieManager.getInstance().flush();
             if (callback != null) callback.onPageFinished(BrowserCore.this, url);
         }
@@ -1232,6 +1241,41 @@ public class BrowserCore {
                     + "</body></html>";
             view.loadDataWithBaseURL(failingUrl, errorHtml, "text/html", "UTF-8", null);
         }
+    }
+
+    private void injectAutofillScript(WebView view, String url) {
+        if (url == null || !url.startsWith("http")) return;
+        try {
+            Uri uri = Uri.parse(url);
+            String domain = uri.getHost();
+            if (domain == null) return;
+            
+            String js = "(function() {"
+                    + "  var passwordField = document.querySelector('input[type=\"password\"]');"
+                    + "  if (passwordField) {"
+                    + "    var form = passwordField.form;"
+                    + "    var usernameField = null;"
+                    + "    if (form) {"
+                    + "      usernameField = form.querySelector('input[type=\"text\"], input[type=\"email\"], input[name*=\"user\"], input[name*=\"email\"]');"
+                    + "    } else {"
+                    + "      usernameField = document.querySelector('input[type=\"text\"], input[type=\"email\"]');"
+                    + "    }"
+                    + "    var hostname = '" + domain.replace("'", "\\'") + "';"
+                    + "    try { AndroidAutofill.onFormDetected(hostname, '" + secureToken + "'); } catch(e) {}"
+                    + "    passwordField.addEventListener('focus', function() {"
+                    + "      try { AndroidAutofill.onRequestAutofill(hostname, '" + secureToken + "'); } catch(e) {}"
+                    + "    });"
+                    + "    if (form) {"
+                    + "      form.addEventListener('submit', function() {"
+                    + "        var u = usernameField ? usernameField.value : '';"
+                    + "        var p = passwordField.value;"
+                    + "        try { AndroidAutofill.onFormSubmitted(hostname, u, p, '" + secureToken + "'); } catch(e) {}"
+                    + "      });"
+                    + "    }"
+                    + "  }"
+                    + "})();";
+            view.evaluateJavascript(js, null);
+        } catch (Exception ignored) {}
     }
 
     // ============================================================= //

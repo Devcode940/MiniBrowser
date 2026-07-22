@@ -194,6 +194,10 @@ public class MainActivity extends AppCompatActivity implements BrowserCore.Callb
         updateNavButtons();
     }
 
+    public GestureWebView getWebview() {
+        return webview;
+    }
+
     private void closeTab(int index) {
         if (index < 0 || index >= tabsList.size()) return;
         Tab toClose = tabsList.remove(index);
@@ -991,6 +995,8 @@ public class MainActivity extends AppCompatActivity implements BrowserCore.Callb
         page.addView(makeDivider());
         page.addView(makeAction("Proxy Routing (Tor/Custom)", R.color.accent, v -> showProxySettingsDialog()));
         page.addView(makeDivider());
+        page.addView(makeAction("Saved Passwords (Enclave)", R.color.accent, v -> showPasswordManagerDialog()));
+        page.addView(makeDivider());
         page.addView(makeAction("Search engine", R.color.accent, v -> chooseSearchEngine()));
         page.addView(makeDivider());
         page.addView(makeAction("Share current page", R.color.accent, v -> shareCurrent()));
@@ -1403,6 +1409,66 @@ public class MainActivity extends AppCompatActivity implements BrowserCore.Callb
                 .show();
     }
 
+    // --------------------------- ENCLAVE PASSWORD MANAGER ---------------------------
+
+    private void showPasswordManagerDialog() {
+        com.minibrowser.database.repositories.CredentialRepository repo = 
+                new com.minibrowser.database.repositories.CredentialRepository(this);
+        
+        ScrollView sv = new ScrollView(this);
+        final LinearLayout rootL = new LinearLayout(this);
+        rootL.setOrientation(LinearLayout.VERTICAL);
+        int pad = (int) dp(16);
+        rootL.setPadding(pad, pad, pad, pad);
+
+        List<com.minibrowser.database.entities.CredentialEntity> list = repo.getAllCredentials("default_user");
+        if (list.isEmpty()) {
+            TextView empty = new TextView(this);
+            empty.setText("No saved passwords. They will be encrypted and saved automatically when you log in!");
+            empty.setTextColor(getColor(R.color.text_secondary));
+            empty.setTextSize(14);
+            empty.setGravity(Gravity.CENTER);
+            rootL.addView(empty);
+        } else {
+            for (com.minibrowser.database.entities.CredentialEntity c : list) {
+                LinearLayout item = new LinearLayout(this);
+                item.setOrientation(LinearLayout.VERTICAL);
+                item.setPadding(0, (int) dp(6), 0, (int) dp(6));
+
+                LinearLayout row = new LinearLayout(this);
+                row.setOrientation(LinearLayout.HORIZONTAL);
+                row.setGravity(Gravity.CENTER_VERTICAL);
+
+                TextView tv = new TextView(this);
+                tv.setText(c.domain + "\nUser: " + c.username);
+                tv.setTextColor(getColor(R.color.text_primary));
+                tv.setTextSize(14);
+                tv.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+                ImageButton del = new ImageButton(this);
+                del.setImageResource(R.drawable.ic_close);
+                del.setBackground(null);
+                del.setOnClickListener(v -> {
+                    repo.deleteCredential(c.id);
+                    rootL.removeView(item);
+                    toast("Deleted saved password");
+                });
+
+                row.addView(tv);
+                row.addView(del);
+                item.addView(row);
+                item.addView(makeDivider());
+                rootL.addView(item);
+            }
+        }
+        sv.addView(rootL);
+        new AlertDialog.Builder(this)
+                .setTitle("Enclave Password Manager")
+                .setView(sv)
+                .setNegativeButton("Close", null)
+                .show();
+    }
+
     // --------------------------- TRANSLATION ---------------------------
 
     private void showTranslateLangPicker() {
@@ -1579,6 +1645,7 @@ public class MainActivity extends AppCompatActivity implements BrowserCore.Callb
                         + "• Customized Native Error Screens\n"
                         + "• In-App Draggable Floating Snack Player\n"
                         + "• Tor SOCKS5 / HTTP Proxy overrides\n"
+                        + "• Enclave Password Autofill & Manager\n"
                         + "• Thread-safe ad/tracker blocking with toggle shields\n"
                         + "• Keystore-encrypted AI API key storage\n"
                         + "• Multi-provider AI Chat integration\n"
