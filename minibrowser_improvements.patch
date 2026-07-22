@@ -1,0 +1,140 @@
+# Save this as minibrowser_improvements.patch
+# Apply with: git apply minibrowser_improvements.patch
+diff --git a/app/build.gradle b/app/build.gradle
+index abc1234..def5678 100644
+--- a/app/build.gradle
++++ b/app/build.gradle
+@@ -1,5 +1,15 @@
+ dependencies {
++    // Room components
++    implementation "androidx.room:room-runtime:2.6.1"
++    kapt "androidx.room:room-compiler:2.6.1"
++    implementation "androidx.room:room-ktx:2.6.1"
++
++    // Lifecycle components
++    implementation "androidx.lifecycle:lifecycle-viewmodel-ktx:2.6.2"
++    implementation "androidx.lifecycle:lifecycle-livedata-ktx:2.6.2"
++    // Existing dependencies...
+ }
+@@ -10,6 +20,12 @@ android {
+ }
++
++    testOptions {
++        execution 'ANDROIDX_TEST_ORCHESTRATOR'
++    }
+ }
++dependencies {
++    androidTestImplementation 'androidx.test:core-ktx:1.5.0'
++    androidTestImplementation 'androidx.test:runner:1.5.2'
++}
+diff --git a/app/src/main/java/com/minibrowser/MiniApp.java b/app/src/main/java/com/minibrowser/MiniApp.java
+index abc1234..def5678 100644
+--- a/app/src/main/java/com/minibrowser/MiniApp.java
++++ b/app/src/main/java/com/minibrowser/MiniApp.java
+@@ -1,10 +1,20 @@
+ package com.minibrowser;
+ import android.app.Application;
++import android.util.Log;
++import com.minibrowser.db.AppDatabase;
++import com.minibrowser.repo.BlocklistRepository;
++import com.minibrowser.repo.BookmarkRepository;
++import com.minibrowser.repo.DownloadRepository;
++import com.minibrowser.security.AuthorizationUtil;
++import com.minibrowser.telemetry.TelemetryManager;
++ 
+ public class MiniApp extends Application {
++    private static final String TAG = "MiniApp";
+     private static MiniApp instance;
++    private AppDatabase database;
++    private BookmarkRepository bookmarkRepository;
++    private DownloadRepository downloadRepository;
++    private BlocklistRepository blocklistRepository;
+  
+     @Override public void onCreate() {
+         super.onCreate();
+         instance = this;
++        
++        // Initialize authorization
++        AuthorizationUtil.setCurrentUserId(null);
++        
++        // Initialize OpenTelemetry
++        TelemetryManager.init(this);
++        
++        // Initialize database
++        database = AppDatabase.getDatabase(this);
++        Log.d(TAG, "Database initialized");
++        
++        // Initialize repositories
++        bookmarkRepository = new BookmarkRepository(this);
++        downloadRepository = new DownloadRepository(this);
++        blocklistRepository = new BlocklistRepository(this);
++        
++        // Migrate legacy data
++        migrateLegacyData();
+     }
++    private void migrateLegacyData() {
++        new Thread(() -> {
++            try {
++                Bookmarks legacyBookmarks = new Bookmarks(this);
++                bookmarkRepository.migrateFromLegacy(
++                    legacyBookmarks.getAllBookmarks(),
++                    () -> Log.d(TAG, "Bookmarks migrated to Room")
++                );
++                
++                DownloadManager legacyDownloadManager = new DownloadManager(this);
++                downloadRepository.migrateFromLegacy(
++                    legacyDownloadManager.getAllDownloads(),
++                    () -> Log.d(TAG, "Downloads migrated to Room")
++                );
++                
++                BlocklistUpdater legacyBlocklist = new BlocklistUpdater(this, null);
++                blocklistRepository.migrateFromLegacy(
++                    legacyBlocklist.getDomains(),
++                    () -> Log.d(TAG, "Blocklist migrated to Room")
++                );
++            } catch (Exception e) {
++                Log.e(TAG, "Legacy migration failed", e);
++            }
++        }).start();
++    }
+     public static MiniApp getInstance() { return instance; }
+     public static Application getContext() { return instance; }
++    
++    public AppDatabase getDatabase() { return database; }
++    public BookmarkRepository getBookmarkRepository() { return bookmarkRepository; }
++    public DownloadRepository getDownloadRepository() { return downloadRepository; }
++    public BlocklistRepository getBlocklistRepository() { return blocklistRepository; }
++    @Override public void onTerminate() {
++        TelemetryManager.shutdown();
++        super.onTerminate();
++    }
+ }
+
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="wrap_content"
+    android:layout_height="match_parent"
+    android:orientation="horizontal"
+    android:paddingHorizontal="8dp"
+    android:gravity="center_vertical"
+    android:background="?attr/selectableItemBackground">
+
+    <TextView
+        android:id="@+id/tabTitle"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="New Tab"
+        android:textColor="@android:color/white"
+        android:textSize="14sp"
+        android:maxLines="1"
+        android:ellipsize="end"/>
+
+    <ImageButton
+        android:id="@+id/closeTab"
+        android:layout_width="24dp"
+        android:layout_height="24dp"
+        android:layout_marginStart="8dp"
+        android:src="@drawable/ic_close"
+        android:background="?attr/selectableItemBackgroundBorderless"
+        android:tint="@android:color/white"/>
+</LinearLayout>
