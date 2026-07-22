@@ -1,5 +1,7 @@
 plugins {
     id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+    id 'kotlin-kapt'
 }
 
 android {
@@ -14,20 +16,11 @@ android {
         versionName "v17"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
-
-        // Multi-dex not needed — sub-10MB target; keep method count low.
         vectorDrawables.useSupportLibrary = true
     }
 
     signingConfigs {
         release {
-            // Default to debug keystore for development
-            // In CI, override with:
-            // gradle -Pandroid.injected.signing.store.file=$KEYSTORE_FILE \
-            //         -Pandroid.injected.signing.store.password=$STORE_PASSWORD \
-            //         -Pandroid.injected.signing.key.alias=$KEY_ALIAS \
-            //         -Pandroid.injected.signing.key.password=$KEY_PASSWORD
-            
             def storeFile = project.hasProperty('android.injected.signing.store.file') ? 
                     project.property('android.injected.signing.store.file') : 
                     System.getenv('MINIBROWSER_RELEASE_STORE_FILE')
@@ -47,25 +40,15 @@ android {
                 keyAlias keyAlias != null ? keyAlias : "minibrowser"
                 keyPassword keyPassword != null ? keyPassword : storePassword != null ? storePassword : ""
             }
-            // If no signing config is provided, fall back to debug keystore
-            // (Note: This is for development only; production builds should use proper signing)
         }
     }
 
     buildTypes {
         release {
-            // R8 shrinking keeps the APK small even with AndroidX.
             minifyEnabled true
             shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'),
                     'proguard-rules.pro'
-            
-            // Signing configuration for release builds
-            // Can be configured via environment variables in CI:
-            // - MINIBROWSER_RELEASE_STORE_FILE
-            // - MINIBROWSER_RELEASE_STORE_PASSWORD
-            // - MINIBROWSER_RELEASE_KEY_ALIAS
-            // - MINIBROWSER_RELEASE_KEY_PASSWORD
             signingConfig signingConfigs.getByName("release")
         }
         debug {
@@ -76,13 +59,14 @@ android {
     }
 
     compileOptions {
-        // Source/target 1.8 — existing browser code is Java 8 compatible.
-        // (AGP 8 builds with JDK 17 toolchain; this controls bytecode level.)
         sourceCompatibility JavaVersion.VERSION_1_8
         targetCompatibility JavaVersion.VERSION_1_8
     }
 
-    // Keep the legacy "src/main" layout — no need to move anything.
+    kotlinOptions {
+        jvmTarget = "1.8"
+    }
+
     sourceSets {
         main {
             manifest.srcFile 'src/main/AndroidManifest.xml'
@@ -121,6 +105,14 @@ dependencies {
     
     // ---- Jetpack Webkit (unlocks modern WebView features on older SDKs) ----
     implementation 'androidx.webkit:webkit:1.11.0'
+
+    // ---- Kotlin Standard Library ----
+    implementation 'org.jetbrains.kotlin:kotlin-stdlib:1.8.22'
+
+    // ---- Room components ----
+    implementation "androidx.room:room-runtime:2.6.1"
+    kapt "androidx.room:room-compiler:2.6.1"
+    implementation "androidx.room:room-ktx:2.6.1"
 
     implementation 'androidx.media3:media3-exoplayer:1.2.1'
     implementation 'androidx.media3:media3-ui:1.2.1'
